@@ -1,0 +1,6 @@
+{
+  "name": "WeApply4U Mail Manager",
+  "description": "A role-based email management system for administering multiple Gmail inboxes and extracting authentication artifacts like OTPs and verification codes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
