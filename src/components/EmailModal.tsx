@@ -86,9 +86,10 @@ export default function EmailModal({ email, onClose, onClassify, userRole }: Ema
   `;
 
   return (
-    <div id="email-detail-container" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4">
+    <div id="email-detail-container" onClick={onClose} className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4">
       <div 
         id="email-detail-card" 
+        onClick={(e) => e.stopPropagation()}
         className="relative flex flex-col w-full max-w-4xl h-[90vh] bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xl"
       >
         {/* Header toolbar */}

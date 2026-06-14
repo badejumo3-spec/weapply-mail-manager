@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { EmailMessage } from "../types";
 import { useAuth } from "./AuthContext";
+import { getTimeRemaining, formatCountdown } from "../utils/time";
 import { 
   Mail, Inbox, Eye, Clock, Key, Link as LinkIcon, ShieldAlert, ShieldCheck, 
   ArrowRight, Shield, CheckCircle, RefreshCw, AlertCircle, ExternalLink, X, HelpCircle
@@ -38,18 +39,19 @@ export function FullInboxPage() {
     return () => clearInterval(interval);
   }, []);
 
-  const handleUpdateStatus = async (emailId: string, status: "auto_filtered" | "admin_only" | "sent_to_tier2" | "pulled_back", visibility: "tier1_only" | "tier2_allowed") => {
+  const handleUpdateStatus = async (
+    emailId: string,
+    action: "send_to_tier2" | "pull_back" | "admin_only"
+  ) => {
     try {
-      const res = await apiFetch(`/api/emails/${emailId}/status`, {
-        method: "PUT",
+      const res = await apiFetch(`/api/emails/${emailId}/classify`, {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ classificationStatus: status, visibilityLevel: visibility })
+        body: JSON.stringify({ action })
       });
+
       if (res.ok) {
-        setEmails(prev => prev.map(e => e.id === emailId ? { ...e, classificationStatus: status, visibilityLevel: visibility } : e));
-        if (selectedEmail && selectedEmail.id === emailId) {
-          setSelectedEmail(prev => prev ? { ...prev, classificationStatus: status, visibilityLevel: visibility } : null);
-        }
+        await fetchEmails(false);
       }
     } catch (err) {
       console.error("Failed to update status:", err);
@@ -57,15 +59,8 @@ export function FullInboxPage() {
   };
 
   const calculateExpiresIn = (expiresAtStr: string) => {
-    import { getTimeRemaining, formatCountdown } from "../utils/time";
-
-   const diff = getTimeRemaining(expiresAtStr);
-   return formatCountdown(diff);
-    const diff = expiresAt - Date.now();
-    if (diff <= 0) return "Expired";
-    const mins = Math.floor(diff / (60 * 1000));
-    if (mins < 1) return "Expiring now";
-    return `${mins}m left`;
+    const diff = getTimeRemaining(expiresAtStr);
+    return formatCountdown(diff);
   };
 
   const getStatusBadge = (classification: string, visibility: string) => {
@@ -101,12 +96,12 @@ export function FullInboxPage() {
     const matchesSearch = 
       email.sender.toLowerCase().includes(searchTerm.toLowerCase()) ||
       email.subject.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (email.otpCode && email.otpCode.includes(searchTerm)) ||
-      (email.verificationLink && email.verificationLink.toLowerCase().includes(searchTerm.toLowerCase()));
+      (email.otp_code && email.otp_code.includes(searchTerm)) ||
+      (email.verification_link && email.verification_link.toLowerCase().includes(searchTerm.toLowerCase()));
 
     if (statusFilter === "all") return matchesSearch;
-    if (statusFilter === "tier2") return matchesSearch && email.visibilityLevel === "tier2_allowed";
-    if (statusFilter === "tier1") return matchesSearch && email.visibilityLevel === "tier1_only";
+    if (statusFilter === "tier2") return matchesSearch && email.visibility_level === "tier2_allowed";
+    if (statusFilter === "tier1") return matchesSearch && email.visibility_level === "tier1_only";
     return matchesSearch;
   });
 
@@ -222,18 +217,18 @@ export function FullInboxPage() {
               </thead>
               <tbody className="divide-y divide-gray-150 text-xs font-sans text-gray-900">
                 {filteredEmails.map((email) => (
-                  <tr 
-                    key={email.id} 
-                    className="hover:bg-indigo-50/20 transition-colors group cursor-pointer"
+                  <tr
+                    key={email.id}
                     onClick={() => setSelectedEmail(email)}
+                    className="hover:bg-indigo-50/20 transition-colors group cursor-pointer"
                   >
                     <td className="px-5 py-3.5">
                       <div className="font-semibold text-gray-900 group-hover:text-indigo-600 transition-colors truncate max-w-xs">
                         {email.sender}
                       </div>
-                      {email.recipientEmail && (
-                        <div className="text-[10px] text-indigo-600 font-mono mt-0.5 max-w-xs truncate" title={email.recipientEmail}>
-                          To: {email.recipientEmail}
+                      {email.recipient_email && (
+                        <div className="text-[10px] text-indigo-600 font-mono mt-0.5 max-w-xs truncate" title={email.recipient_email}>
+                          To: {email.recipient_email}
                         </div>
                       )}
                       <div className="text-[10px] text-slate-400 mt-0.5 font-mono">
@@ -248,53 +243,53 @@ export function FullInboxPage() {
                     <td className="px-5 py-3.5 whitespace-nowrap">
                       <div className="flex items-center gap-1 text-slate-700">
                         <Clock className="h-3.5 w-3.5 text-gray-400 shrink-0" />
-                        <span>{new Date(email.receivedAt).toLocaleTimeString()}</span>
+                        <span>{new Date(email.received_at).toLocaleTimeString()}</span>
                       </div>
                       <div className={`text-[10px] font-mono mt-0.5 font-bold ${
-                        calculateExpiresIn(email.expiresAt) === "Expired" ? "text-rose-600" : "text-amber-600"
+                        calculateExpiresIn(email.expires_at) === "Expired" ? "text-rose-600" : "text-amber-600"
                       }`}>
-                        {calculateExpiresIn(email.expiresAt)}
+                        {calculateExpiresIn(email.expires_at)}
                       </div>
                     </td>
                     <td className="px-5 py-3.5">
-                      {email.otpCode && (
+                      {email.otp_code && (
                         <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-sm bg-indigo-50 text-indigo-700 font-mono text-[10px] font-semibold border border-indigo-100">
                           <Key className="h-3 w-3 text-indigo-500" />
-                          <span>Code: {email.otpCode}</span>
+                          <span>Code: {email.otp_code}</span>
                         </div>
                       )}
-                      {!email.otpCode && email.verificationLink && (
+                      {!email.otp_code && email.verification_link && (
                         <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-sm bg-teal-50 text-teal-700 font-mono text-[10px] font-semibold border border-teal-100 max-w-[200px] truncate">
                           <LinkIcon className="h-3 w-3 text-teal-500 shrink-0" />
                           <span>Has Verify Link</span>
                         </div>
                       )}
-                      {!email.otpCode && !email.verificationLink && (
+                      {!email.otp_code && !email.verification_link && (
                         <span className="text-gray-400 text-[10px] italic">No active tokens</span>
                       )}
                     </td>
                     <td className="px-5 py-3.5 whitespace-nowrap">
-                      {getStatusBadge(email.classificationStatus, email.visibilityLevel)}
+                      {getStatusBadge(email.classification_status, email.visibility_level)}
                     </td>
                     <td className="px-5 py-3.5 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                       <div className="flex justify-end gap-1.5">
-                        {email.visibilityLevel === "tier1_only" ? (
+                        {email.visibility_level === "tier1_only" ? (
                           <button
-                            onClick={() => handleUpdateStatus(email.id, "sent_to_tier2", "tier2_allowed")}
+                            onClick={() => handleUpdateStatus(email.id, "send_to_tier2")}
                             className="px-2.5 py-1 text-[10px] font-bold bg-indigo-650 hover:bg-indigo-700 text-white rounded transition-colors cursor-pointer shadow-xs"
                           >
                             Send to Tier 2
                           </button>
                         ) : (
                           <button
-                            onClick={() => handleUpdateStatus(email.id, "pulled_back", "tier1_only")}
+                            onClick={() => handleUpdateStatus(email.id, "pull_back")}
                             className="px-2.5 py-1 text-[10px] font-bold bg-amber-500 hover:bg-amber-600 text-white rounded transition-colors cursor-pointer shadow-xs"
                           >
                             Pull Back
                           </button>
                         )}
                         <button
-                          onClick={() => handleUpdateStatus(email.id, "admin_only", "tier1_only")}
+                          onClick={() => handleUpdateStatus(email.id, "admin_only")}
                           className="px-2 py-1 text-[10px] font-bold border border-gray-300 hover:bg-gray-55 text-slate-700 rounded transition-colors cursor-pointer bg-white"
                         >
                           Strict Admin Only
@@ -312,8 +307,12 @@ export function FullInboxPage() {
       {/* Safe HTML Custom rendering email View Modal */}
       <AnimatePresence>
         {selectedEmail && (
-          <div className="fixed inset-0 bg-slate-950/60 flex items-center justify-center p-4 z-50 animate-fade-in backdrop-blur-xs">
+          <div
+            onClick={() => setSelectedEmail(null)}
+            className="fixed inset-0 bg-slate-950/60 flex items-center justify-center p-4 z-50 backdrop-blur-xs"
+          >
             <motion.div 
+              onClick={(e) => e.stopPropagation()}
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
@@ -329,9 +328,9 @@ export function FullInboxPage() {
                     <h2 className="text-sm font-bold tracking-tight">{selectedEmail.subject}</h2>
                     <p className="text-[10px] text-slate-350 mt-0.5 font-sans">
                       From: <span className="text-white font-medium">{selectedEmail.sender}</span>
-                      {selectedEmail.recipientEmail && (
+                      {selectedEmail.recipient_email && (
                         <span className="ml-2 pl-2 border-l border-slate-700">
-                          To: <span className="text-indigo-300 font-mono font-bold">{selectedEmail.recipientEmail}</span>
+                          To: <span className="text-indigo-300 font-mono font-bold">{selectedEmail.recipient_email}</span>
                         </span>
                       )}
                     </p>
@@ -352,35 +351,35 @@ export function FullInboxPage() {
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-slate-50 rounded-xl p-4 border border-gray-200">
                   <div>
                     <span className="text-[9px] uppercase font-mono font-bold text-gray-400 block">Received At</span>
-                    <span className="text-xs font-semibold text-slate-800">{new Date(selectedEmail.receivedAt).toLocaleString()}</span>
+                    <span className="text-xs font-semibold text-slate-800">{new Date(selectedEmail.received_at).toLocaleString()}</span>
                   </div>
                   <div>
                     <span className="text-[9px] uppercase font-mono font-bold text-gray-400 block">Data Lifecycle Limits</span>
                     <span className="text-xs font-semibold text-amber-600 font-mono flex items-center gap-1 mt-0.5">
                       <Clock className="h-3.5 w-3.5 text-amber-500 shrink-0" />
-                      Hard Delete in: {calculateExpiresIn(selectedEmail.expiresAt)}
+                      Hard Delete in: {calculateExpiresIn(selectedEmail.expires_at)}
                     </span>
                   </div>
                   <div>
                     <span className="text-[9px] uppercase font-mono font-bold text-gray-400 block">Clearance status</span>
                     <div className="mt-0.5">
-                      {getStatusBadge(selectedEmail.classificationStatus, selectedEmail.visibilityLevel)}
+                      {getStatusBadge(selectedEmail.classification_status, selectedEmail.visibility_level)}
                     </div>
                   </div>
                 </div>
 
                 {/* Extracted payload Highlights */}
-                {(selectedEmail.otpCode || selectedEmail.verificationLink) && (
+                {(selectedEmail.otp_code || selectedEmail.verification_link) && (
                   <div className="bg-indigo-50/50 p-4 rounded-xl border border-indigo-125 grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {selectedEmail.otpCode && (
+                    {selectedEmail.otp_code && (
                       <div className="bg-white p-3 rounded-lg border border-indigo-100 flex items-center justify-between">
                         <div>
                           <span className="text-[9px] uppercase font-mono font-bold font-semibold text-indigo-500">Auto-Extracted OTP CODE</span>
-                          <div className="text-2xl font-mono tracking-wider font-extrabold text-indigo-700 mt-1">{selectedEmail.otpCode}</div>
+                          <div className="text-2xl font-mono tracking-wider font-extrabold text-indigo-700 mt-1">{selectedEmail.otp_code}</div>
                         </div>
                         <button 
                           onClick={() => {
-                            navigator.clipboard.writeText(selectedEmail.otpCode || "");
+                            navigator.clipboard.writeText(selectedEmail.otp_code || "");
                             alert("OTP copied safely.");
                           }}
                           className="px-2.5 py-1.5 text-[10px] font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded transition-colors cursor-pointer shadow-xs"
@@ -390,14 +389,14 @@ export function FullInboxPage() {
                       </div>
                     )}
 
-                    {selectedEmail.verificationLink && (
+                    {selectedEmail.verification_link && (
                       <div className="bg-white p-3 rounded-lg border border-indigo-100 flex flex-col justify-between">
                         <div>
                           <span className="text-[9px] uppercase font-mono font-bold font-semibold text-indigo-400">Extracted verification link</span>
-                          <div className="text-xs font-mono font-semibold text-blue-600 truncate mt-1">{selectedEmail.verificationLink}</div>
+                          <div className="text-xs font-mono font-semibold text-blue-600 truncate mt-1">{selectedEmail.verification_link}</div>
                         </div>
                         <a 
-                          href={selectedEmail.verificationLink}
+                          href={selectedEmail.verification_link}
                           target="_blank" 
                           rel="noopener noreferrer"
                           className="mt-2 text-[10px] font-bold text-indigo-600 hover:text-indigo-750 inline-flex items-center gap-1 hover:underline"
@@ -415,7 +414,6 @@ export function FullInboxPage() {
                     <div className="bg-slate-100 px-4 py-2 border-b border-gray-200 flex items-center justify-between">
                       <span className="text-[10px] font-mono font-bold text-slate-600 uppercase">Sanitized HTML Render (Safe Sandbox)</span>
                     </div>
-                    {/* Render raw HTML securely in srcDoc iFrame */}
                     <div className="h-64 bg-white relative">
                       <iframe
                         srcDoc={`
@@ -436,7 +434,7 @@ export function FullInboxPage() {
                             </style>
                           </head>
                           <body>
-                            ${selectedEmail.fullBodyHtml}
+                            ${selectedEmail.full_body_html}
                           </body>
                           </html>
                         `}
@@ -453,7 +451,7 @@ export function FullInboxPage() {
                       <span className="text-[10px] font-mono font-bold text-slate-600 uppercase">Raw plain text fallback</span>
                     </div>
                     <div className="p-4 bg-slate-50 text-slate-800 font-mono text-[11px] leading-relaxed max-h-48 overflow-y-auto whitespace-pre-wrap selection:bg-indigo-125">
-                      {selectedEmail.fullBodyText ? selectedEmail.fullBodyText : "No plain text fallback content available."}
+                      {selectedEmail.full_body_text ? selectedEmail.full_body_text : "No plain text fallback content available."}
                     </div>
                   </div>
                 </div>
@@ -470,23 +468,23 @@ export function FullInboxPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2 self-end md:self-center">
-                    {selectedEmail.visibilityLevel === "tier1_only" ? (
+                    {selectedEmail.visibility_level === "tier1_only" ? (
                       <button
-                        onClick={() => handleUpdateStatus(selectedEmail.id, "sent_to_tier2", "tier2_allowed")}
+                        onClick={() => handleUpdateStatus(selectedEmail.id, "send_to_tier2")}
                         className="px-4 py-2 text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors cursor-pointer shadow-xs"
                       >
                         Send to Tier 2
                       </button>
                     ) : (
                       <button
-                        onClick={() => handleUpdateStatus(selectedEmail.id, "pulled_back", "tier1_only")}
+                        onClick={() => handleUpdateStatus(selectedEmail.id, "pull_back")}
                         className="px-4 py-2 text-xs font-semibold bg-amber-500 hover:bg-amber-600 text-white rounded-lg transition-colors cursor-pointer shadow-xs"
                       >
                         Pull Back / Redact From Tier 2
                       </button>
                     )}
                     <button
-                      onClick={() => handleUpdateStatus(selectedEmail.id, "admin_only", "tier1_only")}
+                      onClick={() => handleUpdateStatus(selectedEmail.id, "admin_only")}
                       className="px-3 py-2 text-xs font-bold border border-gray-300 hover:bg-gray-100 text-slate-700 rounded-lg transition-colors cursor-pointer bg-white"
                     >
                       Strict Admin Restriction

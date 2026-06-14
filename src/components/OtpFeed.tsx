@@ -67,11 +67,8 @@ export default function OtpFeed({ emails, loading, onRefresh, onSelectEmail }: O
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  // Pre-filter expired client-side to ensure absolute timeliness
+  // Filter feeds based on search query
   const filteredFeed = emails.filter((email) => {
-    const unexpired = getTimeRemaining(email.expires_at) > 0;
-    if (!unexpired) return false;
-
     const query = search.toLowerCase();
     return (
       email.subject.toLowerCase().includes(query) ||
