@@ -47,7 +47,7 @@ function handleFailure(clientId: number, error: any) {
     state.nextAllowedTime = Date.now() + state.current;
     console.log(`[Polling] Next sync allowed for client ${clientId} in ${state.current / 1000}s`);
   } else {
-    // If it's a authorization error, keep it at 60s but mark client with proper status
+    // If it's an authorization error, keep it at 60s but mark client with proper status
     state.current = 60000;
     state.nextAllowedTime = Date.now() + 60000;
     console.warn(`[Polling] Authentication or processing error for client ${clientId}:`, error);
@@ -57,6 +57,7 @@ function handleFailure(clientId: number, error: any) {
 // Auto-refresh OAuth tokens if near expiry
 async function refreshOAuthTokenIfNeeded(client: any): Promise<string> {
   const expiry = parseInt(client.oauth_token_expiry || "0", 10);
+  
   // If token expires in less than 5 minutes (300,000 ms), refresh it
   if (Date.now() + 300000 >= expiry && client.oauth_refresh_token) {
     console.log(`[OAuth] Refreshing token for client ${client.id} (${client.email})...`);
@@ -74,13 +75,23 @@ async function refreshOAuthTokenIfNeeded(client: any): Promise<string> {
 
       if (!res.ok) {
         const errText = await res.text();
+        
+        // If refresh fails with 401, refresh token is invalid - mark for reauth
+        if (res.status === 401) {
+          await query(
+            `UPDATE clients SET status = 'reauth_required', oauth_access_token = NULL WHERE id = $1`,
+            [client.id]
+          );
+          throw new Error(`Refresh token invalid. Client ${client.id} requires re-authentication.`);
+        }
+        
         throw new Error(`Google token refresh failed: ${res.status} ${errText}`);
       }
 
       const data = await res.json();
       const newAccessToken = data.access_token;
       const expiresIn = data.expires_in || 3600;
-      const newExpiryTime = String(Date.now() + expiresIn * 1000);
+      const newExpiryTime = Date.now() + expiresIn * 1000;  // Milliseconds integer
 
       // Update in db
       await query(
@@ -94,10 +105,6 @@ async function refreshOAuthTokenIfNeeded(client: any): Promise<string> {
       return newAccessToken;
     } catch (err: any) {
       console.error(`[OAuth] Error refreshing token for client ${client.id}:`, err);
-      await query(
-        `UPDATE clients SET status = 'error' WHERE id = $1`,
-        [client.id]
-      );
       throw err;
     }
   }
@@ -134,7 +141,7 @@ function getGmailBody(payload: any): { html: string; text: string } {
 
 // Fetch via Gmail API
 async function syncGmailClient(client: any) {
-  const token = await refreshOAuthTokenIfNeeded(client);
+  let token = await refreshOAuthTokenIfNeeded(client);
   if (!token) {
     throw new Error("No access token available for Gmail OAuth synchronization.");
   }
@@ -144,12 +151,25 @@ async function syncGmailClient(client: any) {
   const qStr = encodeURIComponent("newer_than:1h is:unread");
   const listUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${qStr}`;
   
-  const res = await fetch(listUrl, {
+  let res = await fetch(listUrl, {
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: "application/json",
     },
   });
+
+  // If 401, try refresh once and retry
+  if (res.status === 401 && client.oauth_refresh_token) {
+    console.log(`[OAuth] Access token expired, attempting refresh for client ${client.id}...`);
+    token = await refreshOAuthTokenIfNeeded(client);
+    
+    res = await fetch(listUrl, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json",
+      },
+    });
+  }
 
   if (!res.ok) {
     if (res.status === 401) {
@@ -185,7 +205,6 @@ async function syncGmailClient(client: any) {
     const dateStr = headers.find((h: any) => h.name?.toLowerCase() === "date")?.value;
     
     const receivedAt = dateStr ? new Date(dateStr) : new Date();
-    // In force, format to clean ISO
     const receivedISO = receivedAt.toISOString();
 
     // Prevent duplicate entries
@@ -230,8 +249,6 @@ async function syncGmailClient(client: any) {
     );
 
     // Modify Gmail message, mark as read (remove UNREAD label)
-    // The requirement is that we query is:unread, so we should optionally remove 'UNREAD' label or not.
-    // Let's modify it to remove 'UNREAD' to avoid re-fetching, satisfying "newer_than:1h is:unread".
     await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}/modify`, {
       method: "POST",
       headers: {
@@ -296,7 +313,6 @@ async function syncImapClient(client: any) {
 
   try {
     // Search unread messages in INBOX
-    // Fetch unseen messages
     const searchResult = await imapClient.search({ seen: false });
     
     for (const uid of searchResult) {
@@ -385,7 +401,6 @@ async function syncImapClient(client: any) {
 export async function runPollingTick() {
   try {
     // 1. Retention policy cleanup:
-    // DELETE FROM emails WHERE expires_at < NOW()
     const deleteRes = await query("DELETE FROM emails WHERE expires_at < NOW()");
     if (deleteRes.rowCount && deleteRes.rowCount > 0) {
       console.log(`[Retention] Hard deleted ${deleteRes.rowCount} expired emails from system.`);

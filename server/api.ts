@@ -79,7 +79,7 @@ apiRouter.get("/oauth/google/callback", async (req, res) => {
     const accessToken = tokenData.access_token;
     const refreshToken = tokenData.refresh_token; 
     const expiresIn = tokenData.expires_in || 3600;
-    const expiryTimestamp = new Date(Date.now() + expiresIn * 1000);
+    const expiryTimestamp = Date.now() + expiresIn * 1000;  // Milliseconds integer, NOT Date object
 
     // Fetch user profile to match Email ID
     const profileResponse = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
