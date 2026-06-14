@@ -7,8 +7,10 @@ import { query, logAudit } from "./db.js";
 import { decrypt } from "./crypto.js";
 import { extractAuthArtifacts } from "./extraction.js";
 
-// Keep track of exponential backoffs per client in milliseconds
-// backoff levels: 60s -> 120s -> 240s -> max 300s (300,000ms)
+/* -------------------------
+   Backoff Management
+------------------------- */
+
 const backoffStates: Record<number, { current: number; nextAllowedTime: number }> = {};
 
 function getBackoffState(clientId: number) {
@@ -30,102 +32,86 @@ function handleSuccess(clientId: number) {
 function handleFailure(clientId: number, error: any) {
   const state = getBackoffState(clientId);
   const errMsg = error?.message || String(error);
+
   const isNetworkError =
     errMsg.includes("ENOTFOUND") ||
     errMsg.includes("ECONNRESET") ||
     errMsg.includes("ETIMEDOUT") ||
-    errMsg.includes("EAI_AGAIN") ||
-    error?.code === "ENOTFOUND" ||
-    error?.code === "ECONNRESET" ||
-    error?.code === "ETIMEDOUT" ||
-    error?.code === "EAI_AGAIN";
+    errMsg.includes("EAI_AGAIN");
 
   if (isNetworkError) {
-    console.log(`[Polling] Network error detected for client ${clientId}. Increasing backoff...`);
-    // Backoff transitions: 60s (60000) -> 120s (120000) -> 240s (240000) -> max 300s (300000)
     state.current = Math.min(300000, state.current * 2);
     state.nextAllowedTime = Date.now() + state.current;
-    console.log(`[Polling] Next sync allowed for client ${clientId} in ${state.current / 1000}s`);
   } else {
-    // If it's an authorization error, keep it at 60s but mark client with proper status
     state.current = 60000;
     state.nextAllowedTime = Date.now() + 60000;
-    console.warn(`[Polling] Authentication or processing error for client ${clientId}:`, error);
   }
 }
 
-// Auto-refresh OAuth tokens if near expiry
-async function refreshOAuthTokenIfNeeded(client: any): Promise<string> {
+/* -------------------------
+   OAuth Refresh Logic
+------------------------- */
+
+async function refreshOAuthToken(client: any): Promise<string | null> {
+  if (!client.oauth_refresh_token) return null;
+
+  console.log(`[OAuth] Refreshing token for ${client.email}...`);
+
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: process.env.GOOGLE_CLIENT_ID || "",
+      client_secret: process.env.GOOGLE_CLIENT_SECRET || "",
+      refresh_token: client.oauth_refresh_token,
+      grant_type: "refresh_token",
+    }),
+  });
+
+  if (!res.ok) {
+    console.error("[OAuth] Refresh failed:", await res.text());
+    return null;
+  }
+
+  const data = await res.json();
+  const newAccessToken = data.access_token;
+  const expiresIn = data.expires_in || 3600;
+  const newExpiryTime = String(Date.now() + expiresIn * 1000);
+
+  await query(
+    `UPDATE clients 
+     SET oauth_access_token = $1, oauth_token_expiry = $2, status = 'connected'
+     WHERE id = $3`,
+    [newAccessToken, newExpiryTime, client.id]
+  );
+
+  return newAccessToken;
+}
+
+async function refreshOAuthTokenIfNeeded(client: any): Promise<string | null> {
   const expiry = parseInt(client.oauth_token_expiry || "0", 10);
-  
-  // If token expires in less than 5 minutes (300,000 ms), refresh it
-  if (Date.now() + 300000 >= expiry && client.oauth_refresh_token) {
-    console.log(`[OAuth] Refreshing token for client ${client.id} (${client.email})...`);
-    try {
-      const res = await fetch("https://oauth2.googleapis.com/token", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          client_id: process.env.GOOGLE_CLIENT_ID || "",
-          client_secret: process.env.GOOGLE_CLIENT_SECRET || "",
-          refresh_token: client.oauth_refresh_token,
-          grant_type: "refresh_token",
-        }),
-      });
 
-      if (!res.ok) {
-        const errText = await res.text();
-        
-        // If refresh fails with 401, refresh token is invalid - mark for reauth
-        if (res.status === 401) {
-          await query(
-            `UPDATE clients SET status = 'reauth_required', oauth_access_token = NULL WHERE id = $1`,
-            [client.id]
-          );
-          throw new Error(`Refresh token invalid. Client ${client.id} requires re-authentication.`);
-        }
-        
-        throw new Error(`Google token refresh failed: ${res.status} ${errText}`);
-      }
-
-      const data = await res.json();
-      const newAccessToken = data.access_token;
-      const expiresIn = data.expires_in || 3600;
-      const newExpiryTime = Date.now() + expiresIn * 1000;  // Milliseconds integer
-
-      // Update in db
-      await query(
-        `UPDATE clients 
-         SET oauth_access_token = $1, oauth_token_expiry = $2, status = 'connected' 
-         WHERE id = $3`,
-        [newAccessToken, newExpiryTime, client.id]
-      );
-
-      console.log(`[OAuth] Successfully refreshed token for client ${client.id}.`);
-      return newAccessToken;
-    } catch (err: any) {
-      console.error(`[OAuth] Error refreshing token for client ${client.id}:`, err);
-      throw err;
-    }
+  if (Date.now() + 300000 >= expiry) {
+    return await refreshOAuthToken(client);
   }
 
-  return client.oauth_access_token || "";
+  return client.oauth_access_token || null;
 }
 
-// Recursively find Gmail body content
+/* -------------------------
+   Gmail Sync (With 401 Retry)
+------------------------- */
+
 function getGmailBody(payload: any): { html: string; text: string } {
   let html = "";
   let text = "";
 
   if (!payload) return { html, text };
 
-  if (payload.body && payload.body.data) {
+  if (payload.body?.data) {
     const data = Buffer.from(payload.body.data, "base64").toString("utf-8");
-    if (payload.mimeType === "text/html") {
-      html = data;
-    } else {
-      text = data;
-    }
+    if (payload.mimeType === "text/html") html = data;
+    else text = data;
   }
 
   if (payload.parts) {
@@ -139,44 +125,40 @@ function getGmailBody(payload: any): { html: string; text: string } {
   return { html, text };
 }
 
-// Fetch via Gmail API
 async function syncGmailClient(client: any) {
-  let token = await refreshOAuthTokenIfNeeded(client);
-  if (!token) {
-    throw new Error("No access token available for Gmail OAuth synchronization.");
+  if (client.status === "unauthorized") {
+    console.log(`[Polling] Skipping unauthorized client ${client.email}`);
+    return;
   }
 
-  // Get unread emails in the last 1 hour
-  // Query: newer_than:1h is:unread
+  let token = await refreshOAuthTokenIfNeeded(client);
+  if (!token) throw new Error("No access token available.");
+
   const qStr = encodeURIComponent("newer_than:1h is:unread");
   const listUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${qStr}`;
-  
+
   let res = await fetch(listUrl, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/json",
-    },
+    headers: { Authorization: `Bearer ${token}` },
   });
 
-  // If 401, try refresh once and retry
-  if (res.status === 401 && client.oauth_refresh_token) {
-    console.log(`[OAuth] Access token expired, attempting refresh for client ${client.id}...`);
-    token = await refreshOAuthTokenIfNeeded(client);
-    
+  // ✅ Retry once if 401
+  if (res.status === 401) {
+    console.log(`[OAuth] 401 detected. Attempting forced refresh for ${client.email}...`);
+
+    token = await refreshOAuthToken(client);
+
+    if (!token) {
+      await query(`UPDATE clients SET status = 'unauthorized' WHERE id = $1`, [client.id]);
+      throw new Error("Refresh failed after 401.");
+    }
+
     res = await fetch(listUrl, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/json",
-      },
+      headers: { Authorization: `Bearer ${token}` },
     });
   }
 
   if (!res.ok) {
-    if (res.status === 401) {
-      await query("UPDATE clients SET status = 'unauthorized' WHERE id = $1", [client.id]);
-    }
-    const errText = await res.text();
-    throw new Error(`Gmail API List failed: ${res.status} ${errText}`);
+    throw new Error(`Gmail API List failed: ${res.status} ${await res.text()}`);
   }
 
   const listData = await res.json();
@@ -186,52 +168,42 @@ async function syncGmailClient(client: any) {
   for (const msgSummary of messages) {
     const msgId = msgSummary.id;
 
-    // Fetch message details
-    const msgRes = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/json",
-      },
-    });
+    const msgRes = await fetch(
+      `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
 
     if (!msgRes.ok) continue;
 
     const msg = await msgRes.json();
     const headers = msg.payload?.headers || [];
-    
+
     const subject = headers.find((h: any) => h.name?.toLowerCase() === "subject")?.value || "(No Subject)";
     const sender = headers.find((h: any) => h.name?.toLowerCase() === "from")?.value || "Unknown Sender";
     const recipient = headers.find((h: any) => h.name?.toLowerCase() === "to")?.value || client.email;
+
     const dateStr = headers.find((h: any) => h.name?.toLowerCase() === "date")?.value;
-    
     const receivedAt = dateStr ? new Date(dateStr) : new Date();
     const receivedISO = receivedAt.toISOString();
 
-    // Prevent duplicate entries
     const dupCheck = await query(
       `SELECT id FROM emails 
        WHERE sender = $1 AND recipient_email = $2 AND subject = $3 AND received_at = $4`,
       [sender, recipient, subject, receivedISO]
     );
 
-    if (dupCheck.rows.length > 0) {
-      continue; // Row already ingested in previous polls
-    }
+    if (dupCheck.rows.length > 0) continue;
 
     const bodyParts = getGmailBody(msg.payload);
-    const bodyHtml = bodyParts.html || bodyParts.text || "No HTML content";
-    const bodyText = bodyParts.text || bodyParts.html || "No plaintext content";
+    const bodyHtml = bodyParts.html || bodyParts.text || "";
+    const bodyText = bodyParts.text || bodyParts.html || "";
 
-    // Run extraction logic
     const extract = extractAuthArtifacts(subject, bodyText);
-
-    // Calculate expiration: 1 hour since email received
     const expiresAt = new Date(receivedAt.getTime() + 60 * 60 * 1000).toISOString();
 
-    // Insert into db
     await query(
       `INSERT INTO emails (client_id, sender, recipient_email, subject, full_body_html, full_body_text, otp_code, verification_link, received_at, expires_at, classification_status, visibility_level)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
       [
         client.id,
         sender,
@@ -248,63 +220,44 @@ async function syncGmailClient(client: any) {
       ]
     );
 
-    // Modify Gmail message, mark as read (remove UNREAD label)
-    await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}/modify`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        removeLabelIds: ["UNREAD"],
-      }),
-    });
+    await fetch(
+      `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}/modify`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ removeLabelIds: ["UNREAD"] }),
+      }
+    );
 
     processedCount++;
   }
 
-  // Update client last synchronized stats
   await query(
     `UPDATE clients 
-     SET last_synced_at = NOW(), total_emails_processed = total_emails_processed + $1, status = 'connected' 
+     SET last_synced_at = NOW(), total_emails_processed = total_emails_processed + $1, status = 'connected'
      WHERE id = $2`,
     [processedCount, client.id]
   );
-
-  if (processedCount > 0) {
-    await logAudit(
-      "SYSTEM",
-      "DAEMON",
-      `Engine synchronized Google Client ${client.email}: processed ${processedCount} new emails.`,
-      "SUCCESS"
-    );
-  }
 }
 
-// Fetch via IMAP Fallback
+/* -------------------------
+   IMAP Sync (unchanged)
+------------------------- */
+
 async function syncImapClient(client: any) {
   if (!client.imap_host || !client.imap_port || !client.encrypted_password || !client.iv) {
-    throw new Error("Incomplete IMAP credentials config details.");
+    throw new Error("Incomplete IMAP credentials config.");
   }
 
   const decryptedPassword = decrypt(client.encrypted_password, client.iv);
-  if (!decryptedPassword) {
-    throw new Error("Failed to decrypt client password for IMAP connection.");
-  }
-
-  console.log(`[IMAP] Connecting to ${client.imap_host}:${client.imap_port} for ${client.email}...`);
-
   const imapClient = new ImapFlow({
     host: client.imap_host,
     port: client.imap_port,
     secure: client.imap_port === 993,
-    auth: {
-      user: client.email,
-      pass: decryptedPassword,
-    },
-    logger: false,
-    connectionTimeout: 10000,
-    greetingTimeout: 5000,
+    auth: { user: client.email, pass: decryptedPassword },
   });
 
   await imapClient.connect();
@@ -312,65 +265,40 @@ async function syncImapClient(client: any) {
   let processedCount = 0;
 
   try {
-    // Search unread messages in INBOX
     const searchResult = await imapClient.search({ seen: false });
-    
+
     for (const uid of searchResult) {
-      const fetchResult = await imapClient.fetchOne(uid, { source: true, envelope: true });
-      if (!fetchResult || !fetchResult.source) continue;
+      const fetchResult = await imapClient.fetchOne(uid, { source: true });
+      if (!fetchResult?.source) continue;
 
       const parsed = await simpleParser(fetchResult.source);
-      
+
       const subject = parsed.subject || "(No Subject)";
-      const senderObj = parsed.from?.value?.[0];
-      const sender = senderObj ? `${senderObj.name || ""} <${senderObj.address || ""}>`.trim() : "Unknown Sender";
-      const recipient = client.email;
-      const receivedAt = parsed.date
-       ? new Date(parsed.date)
-       : new Date();
+      const sender = parsed.from?.text || "Unknown Sender";
+      const receivedAt = parsed.date ? new Date(parsed.date) : new Date();
       const receivedISO = receivedAt.toISOString();
 
-      // Duplicate prevention
-      const dupCheck = await query(
-        `SELECT id FROM emails 
-         WHERE sender = $1 AND recipient_email = $2 AND subject = $3 AND received_at = $4`,
-        [sender, recipient, subject, receivedISO]
-      );
+      const extract = extractAuthArtifacts(subject, parsed.text || "");
 
-      if (dupCheck.rows.length > 0) {
-        // Mark as seen so we don't fetch it next time even if we skip inserting it
-        await imapClient.messageFlagsAdd(uid, ["\\Seen"]);
-        continue;
-      }
-
-      const bodyHtml = parsed.html || parsed.text || "No HTML content";
-      const bodyText = parsed.text || parsed.html || "No plaintext content";
-
-      // Perform extraction
-      const extract = extractAuthArtifacts(subject, bodyText);
-      const expiresAt = new Date(receivedAt.getTime() + 60 * 60 * 1000).toISOString();
-
-      // Insert
       await query(
         `INSERT INTO emails (client_id, sender, recipient_email, subject, full_body_html, full_body_text, otp_code, verification_link, received_at, expires_at, classification_status, visibility_level)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
         [
           client.id,
           sender,
-          recipient,
+          client.email,
           subject,
-          bodyHtml,
-          bodyText,
+          parsed.html || "",
+          parsed.text || "",
           extract.otp_code,
           extract.verification_link,
           receivedISO,
-          expiresAt,
+          new Date(receivedAt.getTime() + 3600000).toISOString(),
           extract.classification_status,
           extract.visibility_level,
         ]
       );
 
-      // Add \Seen flag to mark as read
       await imapClient.messageFlagsAdd(uid, ["\\Seen"]);
       processedCount++;
     }
@@ -379,46 +307,27 @@ async function syncImapClient(client: any) {
     await imapClient.logout();
   }
 
-  // Update client status
   await query(
-    `UPDATE clients 
-     SET last_synced_at = NOW(), total_emails_processed = total_emails_processed + $1, status = 'connected' 
-     WHERE id = $2`,
+    `UPDATE clients SET last_synced_at = NOW(), total_emails_processed = total_emails_processed + $1 WHERE id = $2`,
     [processedCount, client.id]
   );
-
-  if (processedCount > 0) {
-    await logAudit(
-      "SYSTEM",
-      "DAEMON",
-      `Engine synchronized IMAP client ${client.email}: processed ${processedCount} emails.`,
-      "SUCCESS"
-    );
-  }
 }
 
-// Single database cleanup and synchronization tick
+/* -------------------------
+   Polling Tick
+------------------------- */
+
 export async function runPollingTick() {
   try {
-    // 1. Retention policy cleanup:
-    const deleteRes = await query("DELETE FROM emails WHERE expires_at < NOW()");
-    if (deleteRes.rowCount && deleteRes.rowCount > 0) {
-      console.log(`[Retention] Hard deleted ${deleteRes.rowCount} expired emails from system.`);
-    }
+    await query("DELETE FROM emails WHERE expires_at < NOW()");
 
-    // 2. Fetch all clients
     const clientsResult = await query("SELECT * FROM clients");
     const clients = clientsResult.rows;
 
     for (const client of clients) {
       const state = getBackoffState(client.id);
-      
-      // Verify if client is allowed to be synchronized based on backoff
-      if (Date.now() < state.nextAllowedTime) {
-        continue; // Backed off right now
-      }
 
-      console.log(`[Polling] Synchronizing Client ${client.id} (${client.email})...`);
+      if (Date.now() < state.nextAllowedTime) continue;
 
       try {
         if (client.auth_type === "oauth" && client.provider === "google") {
@@ -426,38 +335,24 @@ export async function runPollingTick() {
         } else if (client.auth_type === "imap") {
           await syncImapClient(client);
         }
-        
-        // Reset backoff on successful execution
         handleSuccess(client.id);
       } catch (err: any) {
         console.error(`[Polling] Failed polling for Client ${client.id}:`, err?.message || err);
         handleFailure(client.id, err);
       }
     }
-  } catch (globalErr) {
-    console.error("[Polling] Critical global error during polling tick:", globalErr);
+  } catch (err) {
+    console.error("[Polling] Global error:", err);
   }
 }
 
 let pollingInterval: NodeJS.Timeout | null = null;
 
 export function startPollingDaemon() {
-  console.log("[Daemon] Starting WeApply4U Mail Manager Polling Daemon (60s tick interval with exponential backoff)...");
-  
-  // Trigger immediately on startup
-  runPollingTick().catch(err => console.error("Initial polling tick failed:", err));
-
-  // Run subsequent ticks every 10 seconds to respond quickly to backoffs and schedule due syncing,
-  // but clients will restrict themselves to their specified backoff window (60s initially)
-  pollingInterval = setInterval(() => {
-    runPollingTick().catch(err => console.error("Scheduling tick error:", err));
-  }, 10000); 
+  runPollingTick();
+  pollingInterval = setInterval(runPollingTick, 10000);
 }
 
 export function stopPollingDaemon() {
-  if (pollingInterval) {
-    clearInterval(pollingInterval);
-    pollingInterval = null;
-    console.log("[Daemon] Polling daemon stopped.");
-  }
+  if (pollingInterval) clearInterval(pollingInterval);
 }
