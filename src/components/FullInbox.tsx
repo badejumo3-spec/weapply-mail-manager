@@ -9,9 +9,28 @@ function CountdownTicker({ expiresAt }: { expiresAt: string }) {
 
   useEffect(() => {
     const update = () => {
-  const parsed = typeof expiresAt === "string"
-    ? new Date(expiresAt + "Z")
-    : new Date(expiresAt);
+import { useEffect, useState } from "react";
+import { getTimeRemaining, formatCountdown } from "../utils/time";
+
+function CountdownTicker({ expiresAt }: { expiresAt: string }) {
+  const [remaining, setRemaining] = useState(0);
+
+  useEffect(() => {
+    const update = () => {
+      setRemaining(getTimeRemaining(expiresAt));
+    };
+
+    update();
+    const interval = setInterval(update, 1000);
+    return () => clearInterval(interval);
+  }, [expiresAt]);
+
+  return (
+    <span className={remaining <= 0 ? "text-rose-500" : "text-amber-500"}>
+      {formatCountdown(remaining)}
+    </span>
+  );
+}
 
   const diff = parsed.getTime() - Date.now();
 

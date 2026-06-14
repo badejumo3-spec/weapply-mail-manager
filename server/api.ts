@@ -9,6 +9,18 @@ import { runPollingTick } from "./polling.js";
 export const apiRouter = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || "default_jwt_secret_value_for_weapply4u_64_chars_long";
 
+function serializeEmailRows(rows: any[]) {
+  return rows.map((email) => ({
+    ...email,
+    received_at: email.received_at
+      ? new Date(email.received_at).toISOString()
+      : null,
+    expires_at: email.expires_at
+      ? new Date(email.expires_at).toISOString()
+      : null,
+  }));
+}
+
 // Helper middleware for JWT token verification
 export function authenticateToken(req: any, res: any, next: any) {
   const authHeader = req.headers["authorization"];
@@ -346,7 +358,7 @@ apiRouter.get("/emails", authenticateToken, requireAdmin, async (req, res) => {
        LEFT JOIN clients c ON e.client_id = c.id
        ORDER BY e.received_at DESC`
     );
-    res.json(result.rows);
+    res.json(serializeEmailRows(result.rows));
   } catch (err) {
     res.status(500).json({ error: "Database failure loading server mail." });
   }
@@ -364,7 +376,7 @@ apiRouter.get("/emails/otps", authenticateToken, async (req: any, res) => {
          WHERE (e.otp_code IS NOT NULL OR e.verification_link IS NOT NULL)
          ORDER BY e.received_at DESC`
       );
-      return res.json(result.rows);
+      return res.json(serializeEmailRows(result.rows));
     } else {
       // Tier 2 Worker: Show only unexpired emails where visibility_level = 'tier2_allowed'
       const result = await query(
@@ -374,7 +386,7 @@ apiRouter.get("/emails/otps", authenticateToken, async (req: any, res) => {
          WHERE e.visibility_level = 'tier2_allowed' AND e.expires_at > NOW()
          ORDER BY e.received_at DESC`
       );
-      return res.json(result.rows);
+      return res.json(serializeEmailRows(result.rows));
     }
   } catch (err) {
     res.status(500).json({ error: "Failed to render credentials feed list." });

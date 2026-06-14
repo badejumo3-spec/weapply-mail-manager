@@ -18,7 +18,9 @@ export default function EmailModal({ email, onClose, onClassify, userRole }: Ema
   // Live countdown timer check
   useEffect(() => {
     const updateCountdown = () => {
-      const expirationTime = new Date(email.expires_at).getTime();
+      import { getTimeRemaining } from "../utils/time";
+
+      const expirationTime = getTimeRemaining(email.expires_at);
       const difference = expirationTime - Date.now();
 
       if (difference <= 0) {

@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Copy, Check, ExternalLink, Flame, Search, Layers, Clock, ShieldCheck, Mail } from "lucide-react";
 import { Email } from "../types";
+import { getTimeRemaining } from "../utils/time";
 
 // Standard Real-time countdown ticker widget for OTP feeds
 function FeedTicker({ expiresAt, onExpire }: { expiresAt: string; onExpire: () => void }) {
@@ -9,17 +10,21 @@ function FeedTicker({ expiresAt, onExpire }: { expiresAt: string; onExpire: () =
 
   useEffect(() => {
     const check = () => {
-      const diff = new Date(expiresAt + "Z").getTime() - Date.now();
+      const diff = getTimeRemaining(expiresAt);
+
       if (diff <= 0) {
-        setTimeLeft("EXPIRED");
-        setExpired(true);
-        onExpire();
-      } else {
-        const mins = Math.floor(diff / 60000);
-        const secs = Math.floor((diff % 60000) / 1000);
-        setTimeLeft(`${mins}m ${secs}s`);
-        setExpired(false);
+        if (!expired) {
+          setExpired(true);
+          setTimeLeft("EXPIRED");
+          onExpire();
+        }
+        return;
       }
+
+      const mins = Math.floor(diff / 60000);
+      const secs = Math.floor((diff % 60000) / 1000);
+      setTimeLeft(`${mins}m ${secs}s`);
+      setExpired(false);
     };
 
     check();
@@ -64,8 +69,7 @@ export default function OtpFeed({ emails, loading, onRefresh, onSelectEmail }: O
 
   // Pre-filter expired client-side to ensure absolute timeliness
   const filteredFeed = emails.filter((email) => {
-    // Standard expiry safety guard
-    const unexpired = new Date(email.expires_at + "Z").getTime() > Date.now();
+    const unexpired = getTimeRemaining(email.expires_at) > 0;
     if (!unexpired) return false;
 
     const query = search.toLowerCase();

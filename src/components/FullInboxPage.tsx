@@ -57,7 +57,10 @@ export function FullInboxPage() {
   };
 
   const calculateExpiresIn = (expiresAtStr: string) => {
-    const expiresAt = new Date(expiresAtStr).getTime();
+    import { getTimeRemaining, formatCountdown } from "../utils/time";
+
+   const diff = getTimeRemaining(expiresAtStr);
+   return formatCountdown(diff);
     const diff = expiresAt - Date.now();
     if (diff <= 0) return "Expired";
     const mins = Math.floor(diff / (60 * 1000));
