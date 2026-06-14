@@ -1,17 +1,9 @@
 import { useState, useEffect } from "react";
 import { Mail, Shield, Trash, Clock, Check, Copy, ExternalLink, KeyRound, Lock, Eye } from "lucide-react";
 import { Email } from "../types";
-
-// Countdown Ticker Component to keep countdown rendering efficient per row
-function CountdownTicker({ expiresAt }: { expiresAt: string }) {
-  const [timeLeft, setTimeLeft] = useState("");
-  const [isExpired, setIsExpired] = useState(false);
-
-  useEffect(() => {
-    const update = () => {
-import { useEffect, useState } from "react";
 import { getTimeRemaining, formatCountdown } from "../utils/time";
 
+// Countdown Ticker Component
 function CountdownTicker({ expiresAt }: { expiresAt: string }) {
   const [remaining, setRemaining] = useState(0);
 
@@ -26,37 +18,17 @@ function CountdownTicker({ expiresAt }: { expiresAt: string }) {
   }, [expiresAt]);
 
   return (
-    <span className={remaining <= 0 ? "text-rose-500" : "text-amber-500"}>
+    <span
+      className={`font-mono text-xs font-bold leading-none ${
+        remaining <= 0
+          ? "text-rose-500 bg-rose-50 px-1.5 py-1 rounded-sm border border-rose-100"
+          : "text-amber-500"
+      }`}
+    >
       {formatCountdown(remaining)}
     </span>
   );
 }
-
-  const diff = parsed.getTime() - Date.now();
-
-  if (diff <= 0) {
-    setTimeLeft("EXPIRED");
-    setIsExpired(true);
-  } else {
-    const mins = Math.floor(diff / 60000);
-    const secs = Math.floor((diff % 60000) / 1000);
-    setTimeLeft(`${mins}m ${secs}s`);
-    setIsExpired(false);
-  }
-};
-
-    update();
-    const interval = setInterval(update, 1000);
-    return () => clearInterval(interval);
-  }, [expiresAt]);
-
-  return (
-    <span className={`font-mono text-xs font-bold leading-none ${isExpired ? "text-rose-500 bg-rose-50 px-1.5 py-1 rounded-sm border border-rose-100" : "text-amber-500"}`}>
-      {timeLeft}
-    </span>
-  );
-}
-
 interface FullInboxProps {
   emails: Email[];
   loading: boolean;
@@ -155,7 +127,7 @@ export default function FullInbox({ emails, loading, onRefresh, onClassify, onSe
                         <span className="truncate">{email.subject}</span>
                         <Eye className="h-3.5 w-3.5 opacity-0 group-hover:opacity-100 text-slate-400 shrink-0 transition-opacity" />
                       </div>
-                      <div className="text-[9px] font-sans text-slate-400 font-semibold mt-0.5">{new Date(email.received_at + "Z").toLocaleTimeString()}</div>
+                      <div className="text-[9px] font-sans text-slate-400 font-semibold mt-0.5">{new Date(email.received_at).toLocaleTimeString()}</div>
                     </td>
 
                     {/* Countdown */}

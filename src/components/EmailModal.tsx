@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { X, Copy, Mail, ShieldAlert, Check, RefreshCw, EyeOff } from "lucide-react";
 import { Email } from "../types";
+import { getTimeRemaining, formatCountdown } from "../utils/time";
 
 interface EmailModalProps {
   email: Email;
@@ -17,27 +18,22 @@ export default function EmailModal({ email, onClose, onClassify, userRole }: Ema
 
   // Live countdown timer check
   useEffect(() => {
-    const updateCountdown = () => {
-      import { getTimeRemaining } from "../utils/time";
+  const updateCountdown = () => {
+    const diff = getTimeRemaining(email.expires_at);
 
-      const expirationTime = getTimeRemaining(email.expires_at);
-      const difference = expirationTime - Date.now();
+    if (diff <= 0) {
+      setTimeLeft("EXPIRED");
+      setIsExpired(true);
+    } else {
+      setTimeLeft(formatCountdown(diff));
+      setIsExpired(false);
+    }
+  };
 
-      if (difference <= 0) {
-        setTimeLeft("EXPIRED");
-        setIsExpired(true);
-      } else {
-        const totalMinutes = Math.floor(difference / 60000);
-        const seconds = Math.floor((difference % 60000) / 1000);
-        setTimeLeft(`${totalMinutes}m ${seconds}s`);
-        setIsExpired(false);
-      }
-    };
-
-    updateCountdown();
-    const interval = setInterval(updateCountdown, 1000);
-    return () => clearInterval(interval);
-  }, [email.expires_at]);
+  updateCountdown();
+  const interval = setInterval(updateCountdown, 1000);
+  return () => clearInterval(interval);
+}, [email.expires_at]);
 
   const handleCopy = (text: string, type: "otp" | "link") => {
     navigator.clipboard.writeText(text);
