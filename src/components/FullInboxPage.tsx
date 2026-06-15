@@ -3,9 +3,10 @@ import { EmailMessage } from "../types";
 import EmailModal from "./EmailModal";
 import { useAuth } from "./AuthContext";
 import { getTimeRemaining, formatCountdown } from "../utils/time";
+import { playNotificationSound } from "../utils/audio"; // ✅ 1. Added Sound Import
 import { 
   Mail, Inbox, Clock, Key, Link as LinkIcon, ShieldAlert, ShieldCheck, 
-  RefreshCw
+  RefreshCw, CheckCircle, Shield
 } from "lucide-react";
 
 export function FullInboxPage() {
@@ -40,6 +41,11 @@ export function FullInboxPage() {
         setEmails(data);
         setPreviousEmailIds(currentIds);
         setNewEmailIds(newIds);
+        
+        // ✅ 2. Added Sound Playback Logic
+        if (newIds.size > 0 && user?.role === "ADMIN") {
+          playNotificationSound();
+        }
         
         setTimeout(() => setNewEmailIds(new Set()), 1000);
       }

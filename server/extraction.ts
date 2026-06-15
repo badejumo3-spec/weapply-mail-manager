@@ -7,6 +7,12 @@ const INTENT_PHRASES = [
   "reset your password",
   "verify your email",
   "confirm your email",
+  "authentication code",
+  "sign in code",
+  "account verification",
+  "two-factor",
+  "2FA code",
+  "verification PIN",
 ];
 
 const REJECT_WORDS = [
@@ -21,6 +27,10 @@ const REJECT_WORDS = [
   "inc.",
   "llc",
   "newsletter",
+  "promotion",
+  "offer",
+  "discount",
+  "marketing",
 ];
 
 export interface ExtractionResult {
@@ -48,9 +58,9 @@ export function extractAuthArtifacts(subject: string, text: string): ExtractionR
     };
   }
 
-  // 2. Extract OTP Code
+  // 2. Extract OTP Code (improved regex)
   let extractedOtp: string | null = null;
-  const otpRegex = /(?:verification code|security code|login code|one-time password|passcode|OTP|enter the code|use this code)[\s\S]{0,100}?([A-Za-z0-9]{4,10})/gi;
+  const otpRegex = /(?:verification code|security code|login code|one-time password|passcode|OTP|enter the code|use this code|authentication code|2FA code|PIN is)[\s\S]{0,100}?([A-Za-z0-9]{4,10})/gi;
   
   let match;
   while ((match = otpRegex.exec(text)) !== null) {
@@ -64,13 +74,13 @@ export function extractAuthArtifacts(subject: string, text: string): ExtractionR
     const surroundingText = text.substring(startWindow, endWindow).toLowerCase();
 
     const isRejected = REJECT_WORDS.some((word) => surroundingText.includes(word));
-    if (!isRejected) {
+    if (!isRejected && !candidate.match(/^(http|www)/i)) {
       extractedOtp = candidate;
-      break; // Found a valid OTP that doesn't trigger exclusion keywords
+      break;
     }
   }
 
-  // 3. Extract Verification Link
+  // 3. Extract Verification Link (improved)
   let extractedLink: string | null = null;
   const urlRegex = /https?:\/\/[^\s"'<>]+/gi;
   const urlMatches = text.match(urlRegex) || [];
@@ -78,15 +88,25 @@ export function extractAuthArtifacts(subject: string, text: string): ExtractionR
   for (const url of urlMatches) {
     const normalizedUrl = url.toLowerCase();
     
-    // Check if the URL contains keywords
-    const urlMatchesKeywords = /reset|verify|confirm|login|authenticate|token/i.test(normalizedUrl);
+    // Skip common non-auth domains
+    if (normalizedUrl.includes("unsubscribe") || 
+        normalizedUrl.includes("marketing") || 
+        normalizedUrl.includes("blog") ||
+        normalizedUrl.includes("facebook.com") ||
+        normalizedUrl.includes("twitter.com") ||
+        normalizedUrl.includes("linkedin.com")) {
+      continue;
+    }
+    
+    // Check if the URL contains auth keywords
+    const urlMatchesKeywords = /reset|verify|confirm|login|authenticate|token|auth|security/i.test(normalizedUrl);
     
     if (urlMatchesKeywords) {
       extractedLink = url;
       break;
     }
 
-    // Checking surrounding text for authentication keywords
+    // Check surrounding text
     const urlIndex = text.indexOf(url);
     if (urlIndex !== -1) {
       const startWindow = Math.max(0, urlIndex - 100);
@@ -101,7 +121,7 @@ export function extractAuthArtifacts(subject: string, text: string): ExtractionR
     }
   }
 
-  // 4. Assign classification and visibility level
+  // 4. Assign classification
   if (extractedOtp || extractedLink) {
     return {
       otp_code: extractedOtp,
