@@ -24,7 +24,29 @@ export default function App() {
   const [syncing, setSyncing] = useState(false);
   const [panelError, setPanelError] = useState<string | null>(null);
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null);
+  const [oauthError, setOauthError] = useState<string | null>(null); // ✅ NEW: OAuth Error State
 
+  // ✅ NEW: Handle OAuth Token from URL (Must run on mount)
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const oauthToken = urlParams.get("token");
+    const oauthStatus = urlParams.get("oauth");
+
+    if (oauthToken && !token) {
+      localStorage.setItem("token", oauthToken);
+      setToken(oauthToken);
+      // Clean URL without refreshing
+      window.history.replaceState({}, document.title, "/");
+    }
+
+    if (oauthStatus === "denied") {
+      setOauthError("Access denied. Only authorized admin emails can login.");
+    } else if (oauthStatus === "error") {
+      setOauthError("OAuth login failed. Please try again.");
+    }
+  }, []);
+
+  // ✅ Existing: Validate Token and Fetch User
   useEffect(() => {
     const fetchMe = async () => {
       if (!token) {
@@ -63,6 +85,7 @@ export default function App() {
     setToken(newToken);
     setUser(loggedUser);
     setActiveTab("otps");
+    setOauthError(null);
   };
 
   const handleLogout = () => {
@@ -72,6 +95,7 @@ export default function App() {
     setEmailQueue([]);
     setClients([]);
     setLogs([]);
+    setOauthError(null);
   };
 
   const fetchEmails = useCallback(async () => {
@@ -216,7 +240,7 @@ export default function App() {
   }
 
   if (!token || !user) {
-    return <Login onSuccess={handleLoginSuccess} />;
+    return <Login onSuccess={handleLoginSuccess} oauthError={oauthError} />;
   }
 
   // ✅ ThemeProvider MUST wrap the entire return JSX
@@ -233,10 +257,30 @@ export default function App() {
         />
 
         <main className="flex-1 p-8 overflow-y-auto h-screen relative scrollbar">
+          {/* ✅ Show OAuth Error if present */}
+          {oauthError && (
+            <div className="mb-6 flex items-start space-x-2.5 p-4 rounded-xl bg-rose-50 dark:bg-rose-900/20 text-rose-800 dark:text-rose-300 text-xs font-semibold border border-rose-200 dark:border-rose-800">
+              <AlertCircle className="h-4.5 w-4.5 shrink-0" />
+              <span>{oauthError}</span>
+              <button 
+                onClick={() => setOauthError(null)}
+                className="ml-auto text-rose-500 hover:text-rose-700"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
           {panelError && (
-            <div className="mb-6 flex items-start space-x-2.5 p-4 rounded-xl bg-amber-50 text-amber-800 text-xs font-semibold border border-amber-200">
+            <div className="mb-6 flex items-start space-x-2.5 p-4 rounded-xl bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-300 text-xs font-semibold border border-amber-200 dark:border-amber-800">
               <AlertCircle className="h-4.5 w-4.5 shrink-0" />
               <span>{panelError}</span>
+              <button 
+                onClick={() => setPanelError(null)}
+                className="ml-auto text-amber-500 hover:text-amber-700"
+              >
+                ✕
+              </button>
             </div>
           )}
 

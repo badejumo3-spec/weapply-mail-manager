@@ -9,6 +9,13 @@ import { runPollingTick } from "./polling.js";
 export const apiRouter = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || "default_jwt_secret_value_for_weapply4u_64_chars_long";
 
+// ✅ Admin Email Whitelist for OAuth Login
+const ADMIN_EMAILS = [
+  "badejumo3@gmail.com",
+  "wadejumo3@gmail.com",
+  "admin@weapplying4u.com",
+];
+
 function serializeEmailRows(rows: any[]) {
   return rows.map((email) => ({
     ...email,
@@ -49,7 +56,30 @@ export function requireAdmin(req: any, res: any, next: any) {
 
 // --- AUTHENTICATION ---
 
-// Google/Gmail Callback Endpoint to handle token exchange and user link
+// ✅ OAuth Initiation Route (NEW)
+apiRouter.get("/oauth/google", (req, res) => {
+  const scopes = [
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
+  ];
+
+  const authUrl =
+    "https://accounts.google.com/o/oauth2/v2/auth?" +
+    new URLSearchParams({
+      client_id: process.env.GOOGLE_CLIENT_ID || "",
+      redirect_uri: process.env.GOOGLE_REDIRECT_URI || "",
+      response_type: "code",
+      scope: scopes.join(" "),
+      access_type: "offline",
+      prompt: "consent",
+      include_granted_scopes: "true",
+    }).toString();
+
+  res.redirect(authUrl);
+});
+
+// ✅ OAuth Callback Route (MERGED - Single Version)
 apiRouter.get("/oauth/google/callback", async (req, res) => {
   const { code } = req.query;
 
@@ -77,12 +107,10 @@ apiRouter.get("/oauth/google/callback", async (req, res) => {
 
     const tokenData = await tokenResponse.json();
     const accessToken = tokenData.access_token;
-    const refreshToken = tokenData.refresh_token; 
+    const refreshToken = tokenData.refresh_token;
     const expiresIn = tokenData.expires_in || 3600;
-    // ✅ FIX: Store as Date object for PostgreSQL TIMESTAMPTZ compatibility
     const expiryTimestamp = new Date(Date.now() + expiresIn * 1000);
 
-    // Fetch user profile to match Email ID
     const profileResponse = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
@@ -95,35 +123,55 @@ apiRouter.get("/oauth/google/callback", async (req, res) => {
     const clientEmail = profileData.email;
     const name = profileData.name || clientEmail.split("@")[0];
 
-    // Check if client exists
-    const checkClient = await query("SELECT id, oauth_refresh_token FROM clients WHERE email = $1", [clientEmail]);
-    
-    if (checkClient.rows.length > 0) {
-      const existing = checkClient.rows[0];
-      // Keep existing refresh token if google fails to yield one (often happens if already consented previously)
-      const finalRefreshToken = refreshToken || existing.oauth_refresh_token;
-      
-      await query(
-        `UPDATE clients 
-         SET oauth_access_token = $1, oauth_refresh_token = $2, oauth_token_expiry = $3, status = 'connected', last_synced_at = NOW()
-         WHERE id = $4`,
-        [accessToken, finalRefreshToken, expiryTimestamp, existing.id]
-      );
-    } else {
-      await query(
-        `INSERT INTO clients (client_name, email, provider, auth_type, oauth_access_token, oauth_refresh_token, oauth_token_expiry, status)
-         VALUES ($1, $2, 'google', 'oauth', $3, $4, $5, 'connected')`,
-        [name, clientEmail, accessToken, refreshToken || "", expiryTimestamp]
-      );
+    // ✅ Security Check: Only whitelisted emails can OAuth login
+    if (!ADMIN_EMAILS.includes(clientEmail)) {
+      await logAudit(clientEmail, "UNKNOWN", "OAuth login attempt blocked - email not in admin whitelist.", "FAILED");
+      return res.redirect("/?oauth=denied");
     }
 
-    await logAudit(clientEmail, "CLIENT", "Authorized successfully via Google OAuth 2.0 flow.", "SUCCESS");
+    // ✅ Check if user exists in DB
+    const existingUser = await query("SELECT * FROM users WHERE email = $1", [clientEmail]);
 
-    // Redirect user back to the application UI
-    res.redirect("/?oauth=success");
+    let user;
+    if (existingUser.rows.length === 0) {
+      // Create admin user
+      const result = await query(
+        `INSERT INTO users (name, email, password_hash, role, is_2fa_enabled) 
+         VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+        [name, clientEmail, "", "ADMIN", false]
+      );
+      user = result.rows[0];
+    } else {
+      user = existingUser.rows[0];
+    }
+
+    // ✅ Store OAuth tokens in clients table for Gmail access
+    await query(
+      `INSERT INTO clients (client_name, email, provider, auth_type, oauth_access_token, oauth_refresh_token, oauth_token_expiry, status)
+       VALUES ($1, $2, 'google', 'oauth', $3, $4, $5, 'connected')
+       ON CONFLICT (email) DO UPDATE SET
+         oauth_access_token = EXCLUDED.oauth_access_token,
+         oauth_refresh_token = EXCLUDED.oauth_refresh_token,
+         oauth_token_expiry = EXCLUDED.oauth_token_expiry,
+         status = 'connected'`,
+      [name, clientEmail, accessToken, refreshToken || "", expiryTimestamp]
+    );
+
+    // ✅ Generate JWT for app session
+    const appToken = jwt.sign(
+      { id: user.id, name: user.name, email: user.email, role: user.role },
+      JWT_SECRET,
+      { expiresIn: "24h" }
+    );
+
+    await logAudit(clientEmail, "ADMIN", "Authorized successfully via Google OAuth 2.0 flow.", "SUCCESS");
+
+    // ✅ Redirect to app with token
+    res.redirect(`/?token=${appToken}&oauth=success`);
   } catch (err: any) {
     console.error("OAuth Exchange failed:", err);
-    res.status(500).send(`Server failed during Google OAuth validation. Trace: ${err?.message || err}`);
+    await logAudit("unknown", "UNKNOWN", `OAuth error: ${err?.message || err}`, "FAILED");
+    res.redirect("/?oauth=error");
   }
 });
 
@@ -189,8 +237,6 @@ apiRouter.post("/auth/login", async (req, res) => {
       return res.status(401).json({ error: "Invalid email or password." });
     }
 
-    // Sign JWT
-    // JWT contains user info
     const token = jwt.sign(
       { id: user.id, name: user.name, email: user.email, role: user.role },
       JWT_SECRET,
@@ -264,7 +310,6 @@ apiRouter.post("/clients/imap", authenticateToken, requireAdmin, async (req: any
     return res.status(400).json({ error: "All IMAP connection credentials are required." });
   }
 
-  // Encrypt the password
   const { encryptedText, iv } = encrypt(password);
 
   try {
@@ -273,7 +318,6 @@ apiRouter.post("/clients/imap", authenticateToken, requireAdmin, async (req: any
       return res.status(400).json({ error: "A client inbox with this email has already been registered." });
     }
 
-    // Insert as trial status
     const result = await query(
       `INSERT INTO clients (client_name, email, provider, auth_type, imap_host, imap_port, encrypted_password, iv, status)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) 
@@ -283,7 +327,6 @@ apiRouter.post("/clients/imap", authenticateToken, requireAdmin, async (req: any
 
     const client = result.rows[0];
 
-    // Log action
     await logAudit(
       req.user.email,
       req.user.role,
@@ -350,7 +393,6 @@ apiRouter.delete("/clients/:id", authenticateToken, requireAdmin, async (req: an
 
 // --- EMAILS MANAGEMENT ---
 
-// Admin-only global full inbox fetch (requires role check inside function if required or standard routes)
 apiRouter.get("/emails", authenticateToken, requireAdmin, async (req, res) => {
   try {
     const result = await query(
@@ -365,11 +407,9 @@ apiRouter.get("/emails", authenticateToken, requireAdmin, async (req, res) => {
   }
 });
 
-// All roles OTP feeds (Restricts automatically based on user level)
 apiRouter.get("/emails/otps", authenticateToken, async (req: any, res) => {
   try {
     if (req.user.role === "ADMIN") {
-      // Admin sees everything
       const result = await query(
         `SELECT e.id, e.client_id, e.sender, e.recipient_email, e.subject, e.full_body_html, e.full_body_text, e.otp_code, e.verification_link, e.received_at, e.expires_at, e.classification_status, e.visibility_level, c.client_name
          FROM emails e
@@ -379,7 +419,6 @@ apiRouter.get("/emails/otps", authenticateToken, async (req: any, res) => {
       );
       return res.json(serializeEmailRows(result.rows));
     } else {
-      // Tier 2 Worker: Show only unexpired emails where visibility_level = 'tier2_allowed'
       const result = await query(
         `SELECT e.id, e.client_id, e.sender, e.recipient_email, e.subject, e.full_body_html, e.full_body_text, e.otp_code, e.verification_link, e.received_at, e.expires_at, e.classification_status, e.visibility_level, c.client_name
          FROM emails e
@@ -394,7 +433,6 @@ apiRouter.get("/emails/otps", authenticateToken, async (req: any, res) => {
   }
 });
 
-// Admin manual override classifications
 apiRouter.post("/emails/:id/classify", authenticateToken, requireAdmin, async (req: any, res) => {
   const { id } = req.params;
   const { action } = req.body;
