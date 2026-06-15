@@ -229,8 +229,8 @@ async function syncGmailClient(client: any) {
     // Run extraction logic
     const extract = extractAuthArtifacts(subject, bodyText);
 
-    // Calculate expiration: 1 hour since email received
-    const expiresAt = new Date(receivedAt.getTime() + 60 * 60 * 1000).toISOString();
+    // ✅ CHANGE: Expiration changed from 60 minutes to 30 minutes
+    const expiresAt = new Date(receivedAt.getTime() + 30 * 60 * 1000).toISOString();
 
     // Insert into db
     await query(
@@ -352,7 +352,8 @@ async function syncImapClient(client: any) {
 
       // Perform extraction
       const extract = extractAuthArtifacts(subject, bodyText);
-      const expiresAt = new Date(receivedAt.getTime() + 60 * 60 * 1000).toISOString();
+      // ✅ CHANGE: Expiration changed from 60 minutes to 30 minutes
+      const expiresAt = new Date(receivedAt.getTime() + 30 * 60 * 1000).toISOString();
 
       // Insert
       await query(

@@ -1,135 +1,239 @@
 import pg from "pg";
-import bcrypt from "bcryptjs";
+import bcrypt from "bcrypt";
+import { UserRole, OtpEmail, SystemLog } from "../src/types";
 
-const { Pool } = pg;
-
-if (!process.env.DATABASE_URL) {
-  console.warn("WARNING: DATABASE_URL is not set in environment. Database connection will fail.");
+export interface DBUser {
+  id: string;
+  name: string;
+  email: string;
+  password_hash: string;
+  role: UserRole;
+  is_2fa_enabled: boolean;
+  created_at: string;
 }
 
-export const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false,
-  },
-});
-
-export async function query(text: string, params?: any[]) {
-  return pool.query(text, params);
+export interface DBClientAccount {
+  id: string;
+  clientName: string;
+  email: string;
+  provider: "google" | "microsoft";
+  auth_type: "imap" | "oauth";
+  imap_host?: string | null;
+  imap_port?: number | null;
+  encrypted_password?: string | null;
+  iv?: string | null;
+  oauth_access_token?: string | null;
+  oauth_refresh_token?: string | null;
+  oauth_token_expiry?: string | null;
+  status: "connected" | "syncing" | "expired" | "disconnected";
+  connectedAt: string;
+  lastSyncedAt: string;
+  assignedWorkers: string[];
+  totalEmailsProcessed: number;
 }
+
+export class DatabaseService {                
+  private pool: pg.Pool | null = null;
+
+  constructor() {
+    const dbUrl = process.env.DATABASE_URL;
+    if (!dbUrl) {
+      throw new Error("DATABASE_URL is required. No fallback allowed.");
+    }
+
+    console.log("DATABASE_URL found. Initializing PostgreSQL pool...");
+
+    this.pool = new pg.Pool({
+      connectionString: dbUrl,
+      ssl: {
+        rejectUnauthorized: false
+      }
+    });
+  }
+
+  async init() {
+    try {
+      const client = await this.pool!.connect();
+      console.log("CONNECTED to real PostgreSQL database! Setting up schemas...");
+      
+      // 1. Create Users
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS users (
+          id VARCHAR(100) PRIMARY KEY,
+          name VARCHAR(255) NOT NULL,
+          email VARCHAR(255) UNIQUE NOT NULL,
+          password_hash VARCHAR(255) NOT NULL,
+          role VARCHAR(50) NOT NULL DEFAULT 'WORKER',
+          is_2fa_enabled BOOLEAN DEFAULT FALSE,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
+      // 2. Create Clients
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS clients (
+          id VARCHAR(100) PRIMARY KEY,
+          client_name VARCHAR(255) NOT NULL,
+          email VARCHAR(255) UNIQUE NOT NULL,
+          provider VARCHAR(50) NOT NULL,
+          auth_type VARCHAR(20) NOT NULL DEFAULT 'imap',
+          imap_host VARCHAR(255) NULL,
+          imap_port INTEGER NULL,
+          encrypted_password TEXT NULL,
+          iv VARCHAR(100) NULL,
+          oauth_access_token TEXT NULL,
+          oauth_refresh_token TEXT NULL,
+          oauth_token_expiry TIMESTAMP NULL,
+          status VARCHAR(50) NOT NULL DEFAULT 'connected',
+          connected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          last_synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          total_emails_processed INTEGER DEFAULT 0
+        )
+      `);
+
+      // 3. Create Assignments
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS worker_assignments (
+          id SERIAL PRIMARY KEY,
+          worker_id VARCHAR(100) REFERENCES users(id) ON DELETE CASCADE,
+          client_id VARCHAR(100) REFERENCES clients(id) ON DELETE CASCADE,
+          assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(worker_id, client_id)
+        )
+      `);
+
+      // 4. Create Emails Table
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS emails (
+          id VARCHAR(100) PRIMARY KEY,
+          client_id VARCHAR(100) REFERENCES clients(id) ON DELETE CASCADE,
+          sender VARCHAR(255) NOT NULL,
+          subject VARCHAR(500) NOT NULL,
+          recipient_email VARCHAR(255) NULL,
+          full_body_html TEXT NOT NULL,
+          full_body_text TEXT NOT NULL,
+          otp_code VARCHAR(32) NULL,
+          verification_link TEXT NULL,
+          received_at TIMESTAMP NOT NULL,
+          expires_at TIMESTAMP NOT NULL,
+          classification_status VARCHAR(50) NOT NULL,
+          visibility_level VARCHAR(20) NOT NULL
+        )
+      `);
+
+      // 5. Create Audit Log
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS audit_logs (
+          id VARCHAR(100) PRIMARY KEY,
+          timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          actor VARCHAR(255) NOT NULL,
+          role VARCHAR(50) NOT NULL,
+          action TEXT NOT NULL,
+          status VARCHAR(50) NOT NULL,
+          ip_address VARCHAR(100) NULL
+        )
+      `);
+
+      // Seed initial admin if database is empty
+      const userCountRes = await client.query("SELECT COUNT(*) FROM users");
+      const count = parseInt(userCountRes.rows[0].count);
+      if (count === 0) {
+        console.log("Seeding initial administrator credentials...");
+        const adminHash = await bcrypt.hash("adminpassword123", 10);
+
+        await client.query(`
+          INSERT INTO users (id, name, email, password_hash, role, is_2fa_enabled) VALUES
+          ('admin_1', 'Admin', 'badejumo3@gmail.com', $1, 'ADMIN', false)
+        `, [adminHash]);
+      }
+
+      client.release();
+      console.log("PostgreSQL setup completed successfully!");
+    } catch (err) {
+      console.error("Error setting up PostgreSQL schemas.", err);
+      process.exit(1);
+    }
+  }
+
+  // --- DATABASE HELPERS ---
+
+  async query(sql: string, params?: any[]) {
+    return await this.pool!.query(sql, params);
+  }
+
+  async updateClientOAuthTokens(id: string, accessToken: string, expiryDate?: string | null): Promise<void> {
+    if (expiryDate) {
+      await this.pool!.query(
+        "UPDATE clients SET oauth_access_token = $1, oauth_token_expiry = $2 WHERE id = $3",
+        [accessToken, new Date(expiryDate), id]
+      );
+    } else {
+      await this.pool!.query(
+        "UPDATE clients SET oauth_access_token = $1 WHERE id = $2",
+        [accessToken, id]
+      );
+    }
+  }
+
+  async updateClientSyncStats(id: string, emailCountIncrement = 1): Promise<void> {
+    await this.pool!.query(`
+      UPDATE clients 
+      SET total_emails_processed = total_emails_processed + $1, last_synced_at = CURRENT_TIMESTAMP
+      WHERE id = $2
+    `, [emailCountIncrement, id]);
+  }
+
+  async addAuditLog(log: Omit<SystemLog, "id">): Promise<void> {
+    const id = "log_" + Math.floor(Math.random() * 100000);
+    await this.pool!.query(`
+      INSERT INTO audit_logs (id, timestamp, actor, role, action, status, ip_address)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `, [
+      id,
+      new Date(log.timestamp),
+      log.actor,
+      log.role,
+      log.action,
+      log.status,
+      log.ipAddress || null
+    ]);
+  }
+}
+
+// ============================================
+// WRAPPER FUNCTIONS FOR BACKWARD COMPATIBILITY
+// ============================================
+
+// ============================================
+// WRAPPER FUNCTIONS FOR BACKWARD COMPATIBILITY
+// ============================================
+
+const db = new DatabaseService();
 
 export async function initDb() {
-  console.log("Initializing database schema if not exists...");
-  
-  try {
-    // 1. Create users table
-    await query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        name VARCHAR(255) NOT NULL,
-        email VARCHAR(255) UNIQUE NOT NULL,
-        password_hash VARCHAR(255) NOT NULL,
-        role VARCHAR(50) NOT NULL, -- 'ADMIN' | 'WORKER'
-        is_2fa_enabled BOOLEAN DEFAULT FALSE,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-
-    // 2. Create clients table
-    await query(`
-      CREATE TABLE IF NOT EXISTS clients (
-        id SERIAL PRIMARY KEY,
-        client_name VARCHAR(255) NOT NULL,
-        email VARCHAR(255) UNIQUE NOT NULL,
-        provider VARCHAR(50) NOT NULL DEFAULT 'google',
-        auth_type VARCHAR(50) NOT NULL DEFAULT 'oauth',
-        imap_host VARCHAR(255),
-        imap_port INTEGER,
-        encrypted_password TEXT,
-        iv VARCHAR(255),
-        oauth_access_token TEXT,
-        oauth_refresh_token TEXT,
-        oauth_token_expiry VARCHAR(255),
-        status VARCHAR(50) NOT NULL DEFAULT 'connected',
-        connected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        last_synced_at TIMESTAMP,
-        total_emails_processed INTEGER DEFAULT 0
-      );
-    `);
-
-    // 3. Create emails table
-    await query(`
-      CREATE TABLE IF NOT EXISTS emails (
-        id SERIAL PRIMARY KEY,
-        client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
-        sender VARCHAR(255) NOT NULL,
-        recipient_email VARCHAR(255) NOT NULL,
-        subject VARCHAR(255) NOT NULL,
-        full_body_html TEXT NOT NULL,
-        full_body_text TEXT NOT NULL,
-        otp_code VARCHAR(255),
-        verification_link TEXT,
-        received_at TIMESTAMP NOT NULL,
-        expires_at TIMESTAMP NOT NULL,
-        classification_status VARCHAR(100) NOT NULL DEFAULT 'admin_only',
-        visibility_level VARCHAR(100) NOT NULL DEFAULT 'tier1_only'
-      );
-    `);
-
-    // 4. Create audit_logs table
-    await query(`
-      CREATE TABLE IF NOT EXISTS audit_logs (
-        id SERIAL PRIMARY KEY,
-        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        actor VARCHAR(255) NOT NULL,
-        role VARCHAR(100) NOT NULL,
-        action TEXT NOT NULL,
-        status VARCHAR(50) NOT NULL,
-        ip_address VARCHAR(100)
-      );
-    `);
-
-    console.log("Database schema checked and verified.");
-
-    // Seed default users if users table is empty
-    const userCountResult = await query("SELECT COUNT(*) FROM users");
-    const count = parseInt(userCountResult.rows[0].count, 10);
-    
-    if (count === 0) {
-      console.log("Seeding default users...");
-      const adminHash = await bcrypt.hash("admin123", 10);
-      const workerHash = await bcrypt.hash("worker123", 10);
-
-      await query(
-        `INSERT INTO users (name, email, password_hash, role, is_2fa_enabled) 
-         VALUES ($1, $2, $3, $4, $5)`,
-        ["Admin User", "admin@weapply4u.com", adminHash, "ADMIN", false]
-      );
-
-      await query(
-        `INSERT INTO users (name, email, password_hash, role, is_2fa_enabled) 
-         VALUES ($1, $2, $3, $4, $5)`,
-        ["Worker Tier2 User", "worker@weapply4u.com", workerHash, "WORKER", false]
-      );
-
-      console.log("Seeding complete: ");
-      console.log(" - Admin: admin@weapply4u.com / admin123");
-      console.log(" - Worker: worker@weapply4u.com / worker123");
-    }
-  } catch (error) {
-    console.error("Error during database schema setup:", error);
-    throw error;
-  }
+  await db.init();
 }
 
-export async function logAudit(actor: string, role: string, action: string, status: string, ip: string | null = null) {
-  try {
-    await query(
-      `INSERT INTO audit_logs (actor, role, action, status, ip_address) 
-       VALUES ($1, $2, $3, $4, $5)`,
-      [actor, role, action, status, ip]
-    );
-  } catch (err) {
-    console.error("Failed to write audit log:", err);
-  }
+export async function query(sql: string, params?: any[]) {
+  return await db.query(sql, params);
 }
+
+export async function logAudit(
+  actor: string,
+  role: string,
+  action: string,
+  status: string,
+  ipAddress?: string
+) {
+  await db.addAuditLog({
+    timestamp: new Date().toISOString(),
+    actor,
+    role,
+    action,
+    status,
+    ipAddress: ipAddress || null
+  });
+}
+
+// DatabaseService class is already exported at line 35
+// db singleton is used internally by wrapper functions

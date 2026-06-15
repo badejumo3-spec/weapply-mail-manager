@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { EmailMessage } from "../types";
 import { useAuth } from "./AuthContext";
 import { getTimeRemaining, formatCountdown } from "../utils/time";
@@ -16,20 +16,46 @@ export function FullInboxPage() {
   const [selectedEmail, setSelectedEmail] = useState<EmailMessage | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [previousEmailIds, setPreviousEmailIds] = useState<Set<string>>(new Set());
+  const [newEmailIds, setNewEmailIds] = useState<Set<string>>(new Set());
+  
+  // Preserve scroll position during refresh
+  const tableContainerRef = useRef<HTMLDivElement>(null);
+  const scrollPositionRef = useRef<number>(0);
 
   const fetchEmails = async (showSpinner = false) => {
+    // Save scroll position before refresh
+    if (tableContainerRef.current) {
+      scrollPositionRef.current = tableContainerRef.current.scrollTop;
+    }
+
     if (showSpinner) setIsSyncing(true);
     try {
       const res = await apiFetch("/api/emails");
       if (res.ok) {
         const data = await res.json();
+        
+        // Track which emails are new for animation
+        const currentIds = new Set(data.map((e: EmailMessage) => e.id));
+        const newIds = new Set(data.filter((e: EmailMessage) => !previousEmailIds.has(e.id)).map((e: EmailMessage) => e.id));
+        
         setEmails(data);
+        setPreviousEmailIds(currentIds);
+        setNewEmailIds(newIds);
+        
+        // Clear new email animation flag after 1 second
+        setTimeout(() => setNewEmailIds(new Set()), 1000);
       }
     } catch (err) {
       console.error("Failed to fetch full inbox:", err);
     } finally {
       setLoading(false);
       setIsSyncing(false);
+      
+      // Restore scroll position after refresh
+      if (tableContainerRef.current) {
+        tableContainerRef.current.scrollTop = scrollPositionRef.current;
+      }
     }
   };
 
@@ -199,14 +225,14 @@ export function FullInboxPage() {
             <Inbox className="h-10 w-10 mx-auto text-gray-300 mb-3" />
             <h3 className="text-xs font-bold text-gray-900">No Emails Found</h3>
             <p className="text-[11px] text-gray-400 max-w-sm mx-auto mt-1">
-              Either no recent emails have been processed in the last hour, or none match your selected search criteria.
+              Either no recent emails have been processed in the last 30 minutes, or none match your selected search criteria.
             </p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
+          <div ref={tableContainerRef} className="overflow-x-auto max-h-[600px] overflow-y-auto">
             <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-slate-50 border-b border-gray-200 text-[10px] font-mono font-bold text-gray-400 uppercase tracking-wider">
+              <thead className="sticky top-0 bg-slate-50 z-10">
+                <tr className="border-b border-gray-200 text-[10px] font-mono font-bold text-gray-400 uppercase tracking-wider">
                   <th className="px-5 py-3">Sender & Recipient</th>
                   <th className="px-5 py-3">Subject line</th>
                   <th className="px-5 py-3">Temporal Status</th>
@@ -216,88 +242,93 @@ export function FullInboxPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-150 text-xs font-sans text-gray-900">
-                {filteredEmails.map((email) => (
-                  <tr
-                    key={email.id}
-                    onClick={() => setSelectedEmail(email)}
-                    className="hover:bg-indigo-50/20 transition-colors group cursor-pointer"
-                  >
-                    <td className="px-5 py-3.5">
-                      <div className="font-semibold text-gray-900 group-hover:text-indigo-600 transition-colors truncate max-w-xs">
-                        {email.sender}
-                      </div>
-                      {email.recipient_email && (
-                        <div className="text-[10px] text-indigo-600 font-mono mt-0.5 max-w-xs truncate" title={email.recipient_email}>
-                          To: {email.recipient_email}
+                <AnimatePresence>
+                  {filteredEmails.map((email) => (
+                    <motion.tr
+                      key={email.id}
+                      initial={newEmailIds.has(email.id) ? { opacity: 0, y: -20 } : false}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.3 }}
+                      onClick={() => setSelectedEmail(email)}
+                      className="hover:bg-indigo-50/20 transition-colors group cursor-pointer"
+                    >
+                      <td className="px-5 py-3.5">
+                        <div className="font-semibold text-gray-900 group-hover:text-indigo-600 transition-colors truncate max-w-xs">
+                          {email.sender}
                         </div>
-                      )}
-                      <div className="text-[10px] text-slate-400 mt-0.5 font-mono">
-                        UID: {email.id}
-                      </div>
-                    </td>
-                    <td className="px-5 py-3.5">
-                      <div className="font-medium text-slate-800 truncate max-w-xs">
-                        {email.subject}
-                      </div>
-                    </td>
-                    <td className="px-5 py-3.5 whitespace-nowrap">
-                      <div className="flex items-center gap-1 text-slate-700">
-                        <Clock className="h-3.5 w-3.5 text-gray-400 shrink-0" />
-                        <span>{new Date(email.received_at).toLocaleTimeString()}</span>
-                      </div>
-                      <div className={`text-[10px] font-mono mt-0.5 font-bold ${
-                        calculateExpiresIn(email.expires_at) === "Expired" ? "text-rose-600" : "text-amber-600"
-                      }`}>
-                        {calculateExpiresIn(email.expires_at)}
-                      </div>
-                    </td>
-                    <td className="px-5 py-3.5">
-                      {email.otp_code && (
-                        <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-sm bg-indigo-50 text-indigo-700 font-mono text-[10px] font-semibold border border-indigo-100">
-                          <Key className="h-3 w-3 text-indigo-500" />
-                          <span>Code: {email.otp_code}</span>
-                        </div>
-                      )}
-                      {!email.otp_code && email.verification_link && (
-                        <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-sm bg-teal-50 text-teal-700 font-mono text-[10px] font-semibold border border-teal-100 max-w-[200px] truncate">
-                          <LinkIcon className="h-3 w-3 text-teal-500 shrink-0" />
-                          <span>Has Verify Link</span>
-                        </div>
-                      )}
-                      {!email.otp_code && !email.verification_link && (
-                        <span className="text-gray-400 text-[10px] italic">No active tokens</span>
-                      )}
-                    </td>
-                    <td className="px-5 py-3.5 whitespace-nowrap">
-                      {getStatusBadge(email.classification_status, email.visibility_level)}
-                    </td>
-                    <td className="px-5 py-3.5 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                      <div className="flex justify-end gap-1.5">
-                        {email.visibility_level === "tier1_only" ? (
-                          <button
-                            onClick={() => handleUpdateStatus(email.id, "send_to_tier2")}
-                            className="px-2.5 py-1 text-[10px] font-bold bg-indigo-650 hover:bg-indigo-700 text-white rounded transition-colors cursor-pointer shadow-xs"
-                          >
-                            Send to Tier 2
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => handleUpdateStatus(email.id, "pull_back")}
-                            className="px-2.5 py-1 text-[10px] font-bold bg-amber-500 hover:bg-amber-600 text-white rounded transition-colors cursor-pointer shadow-xs"
-                          >
-                            Pull Back
-                          </button>
+                        {email.recipient_email && (
+                          <div className="text-[10px] text-indigo-600 font-mono mt-0.5 max-w-xs truncate" title={email.recipient_email}>
+                            To: {email.recipient_email}
+                          </div>
                         )}
-                        <button
-                          onClick={() => handleUpdateStatus(email.id, "admin_only")}
-                          className="px-2 py-1 text-[10px] font-bold border border-gray-300 hover:bg-gray-55 text-slate-700 rounded transition-colors cursor-pointer bg-white"
-                        >
-                          Strict Admin Only
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                        <div className="text-[10px] text-slate-400 mt-0.5 font-mono">
+                          UID: {email.id}
+                        </div>
+                      </td>
+                      <td className="px-5 py-3.5">
+                        <div className="font-medium text-slate-800 truncate max-w-xs">
+                          {email.subject}
+                        </div>
+                      </td>
+                      <td className="px-5 py-3.5 whitespace-nowrap">
+                        <div className="flex items-center gap-1 text-slate-700">
+                          <Clock className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+                          <span>{new Date(email.received_at).toLocaleTimeString()}</span>
+                        </div>
+                        <div className={`text-[10px] font-mono mt-0.5 font-bold ${
+                          calculateExpiresIn(email.expires_at) === "Expired" ? "text-rose-600" : "text-amber-600"
+                        }`}>
+                          {calculateExpiresIn(email.expires_at)}
+                        </div>
+                      </td>
+                      <td className="px-5 py-3.5">
+                        {email.otp_code && (
+                          <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-sm bg-indigo-50 text-indigo-700 font-mono text-[10px] font-semibold border border-indigo-100">
+                            <Key className="h-3 w-3 text-indigo-500" />
+                            <span>Code: {email.otp_code}</span>
+                          </div>
+                        )}
+                        {!email.otp_code && email.verification_link && (
+                          <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-sm bg-teal-50 text-teal-700 font-mono text-[10px] font-semibold border border-teal-100 max-w-[200px] truncate">
+                            <LinkIcon className="h-3 w-3 text-teal-500 shrink-0" />
+                            <span>Has Verify Link</span>
+                          </div>
+                        )}
+                        {!email.otp_code && !email.verification_link && (
+                          <span className="text-gray-400 text-[10px] italic">No active tokens</span>
+                        )}
+                      </td>
+                      <td className="px-5 py-3.5 whitespace-nowrap">
+                        {getStatusBadge(email.classification_status, email.visibility_level)}
+                      </td>
+                      <td className="px-5 py-3.5 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex justify-end gap-1.5">
+                          {email.visibility_level === "tier1_only" ? (
+                            <button
+                              onClick={() => handleUpdateStatus(email.id, "send_to_tier2")}
+                              className="px-2.5 py-1 text-[10px] font-bold bg-indigo-650 hover:bg-indigo-700 text-white rounded transition-colors cursor-pointer shadow-xs"
+                            >
+                              Send to Tier 2
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleUpdateStatus(email.id, "pull_back")}
+                              className="px-2.5 py-1 text-[10px] font-bold bg-amber-500 hover:bg-amber-600 text-white rounded transition-colors cursor-pointer shadow-xs"
+                            >
+                              Pull Back
+                            </button>
+                          )}
+                          <button
+                            onClick={() => handleUpdateStatus(email.id, "admin_only")}
+                            className="px-2 py-1 text-[10px] font-bold border border-gray-300 hover:bg-gray-55 text-slate-700 rounded transition-colors cursor-pointer bg-white"
+                          >
+                            Strict Admin Only
+                          </button>
+                        </div>
+                      </td>
+                    </motion.tr>
+                  ))}
+                </AnimatePresence>
               </tbody>
             </table>
           </div>
