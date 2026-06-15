@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { User, Email, Client, AuditLog } from "./types";
+import { ThemeProvider } from "./context/ThemeContext";
 import Login from "./components/Login";
 import Sidebar from "./components/Sidebar";
 import OtpFeed from "./components/OtpFeed";
@@ -13,26 +14,17 @@ export default function App() {
   const [token, setToken] = useState<string | null>(localStorage.getItem("token"));
   const [user, setUser] = useState<User | null>(null);
   const [initializing, setInitializing] = useState(true);
-
-  // Layout navigation state
   const [activeTab, setActiveTab] = useState<string>("otps");
-
-  // Data layers
   const [emails, setEmailQueue] = useState<Email[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [logs, setLogs] = useState<AuditLog[]>([]);
-
-  // Status spinner states
   const [loadingEmails, setLoadingEmails] = useState(false);
   const [loadingClients, setLoadingClients] = useState(false);
   const [loadingLogs, setLoadingLogs] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [panelError, setPanelError] = useState<string | null>(null);
-
-  // Active email modal target
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null);
 
-  // Bootstrap user profile configuration
   useEffect(() => {
     const fetchMe = async () => {
       if (!token) {
@@ -50,7 +42,6 @@ export default function App() {
 
         const me: User = await res.json();
         setUser(me);
-        // Force default tab for WORKER safety
         if (me.role !== "ADMIN") {
           setActiveTab("otps");
         }
@@ -71,11 +62,7 @@ export default function App() {
     localStorage.setItem("token", newToken);
     setToken(newToken);
     setUser(loggedUser);
-    if (loggedUser.role === "ADMIN") {
-      setActiveTab("otps");
-    } else {
-      setActiveTab("otps");
-    }
+    setActiveTab("otps");
   };
 
   const handleLogout = () => {
@@ -87,13 +74,11 @@ export default function App() {
     setLogs([]);
   };
 
-  // 1. Load Emails
   const fetchEmails = useCallback(async () => {
     if (!token || !user) return;
     setLoadingEmails(true);
     setPanelError(null);
     try {
-      // Direct correct endpoint depending on privileges
       const url = activeTab === "inbox" ? "/api/emails" : "/api/emails/otps";
       const res = await fetch(url, {
         headers: { Authorization: `Bearer ${token}` },
@@ -103,7 +88,6 @@ export default function App() {
       const data: Email[] = await res.json();
       setEmailQueue(data);
 
-      // Re-hydrate the currently selected email modal details to show live updates if open
       if (selectedEmail) {
         const matchingEmail = data.find((e) => e.id === selectedEmail.id);
         if (matchingEmail) {
@@ -117,7 +101,6 @@ export default function App() {
     }
   }, [token, user, activeTab, selectedEmail]);
 
-  // 2. Load Clients
   const fetchClients = useCallback(async () => {
     if (!token || !user || user.role !== "ADMIN") return;
     setLoadingClients(true);
@@ -135,7 +118,6 @@ export default function App() {
     }
   }, [token, user]);
 
-  // 3. Load Audit Logs
   const fetchLogs = useCallback(async () => {
     if (!token || !user || user.role !== "ADMIN") return;
     setLoadingLogs(true);
@@ -153,7 +135,6 @@ export default function App() {
     }
   }, [token, user]);
 
-  // Dispatch data loading contextually depending on active view tab
   useEffect(() => {
     if (!token || !user) return;
 
@@ -166,7 +147,6 @@ export default function App() {
     }
   }, [activeTab, token, user, fetchEmails, fetchClients, fetchLogs]);
 
-  // Auto polling refresh (every 10 seconds on active screen tab)
   useEffect(() => {
     if (!token || !user) return;
 
@@ -181,7 +161,6 @@ export default function App() {
     return () => clearInterval(interval);
   }, [activeTab, token, user, fetchEmails, fetchClients]);
 
-  // Manual pull synced daemon processor
   const handleManualSync = async () => {
     if (!token || !user || user.role !== "ADMIN") return;
     setSyncing(true);
@@ -197,7 +176,6 @@ export default function App() {
         throw new Error(body.error || "Manual sync rejected.");
       }
 
-      // Re-hydrate queues
       await Promise.all([fetchEmails(), fetchClients()]);
     } catch (err: any) {
       setPanelError(err?.message || "Sync request server failed.");
@@ -206,7 +184,6 @@ export default function App() {
     }
   };
 
-  // Administrative classification action dispatch
   const handleClassify = async (id: number, action: "send_to_tier2" | "pull_back" | "admin_only") => {
     if (!token || !user || user.role !== "ADMIN") return;
     try {
@@ -221,14 +198,12 @@ export default function App() {
 
       if (!res.ok) throw new Error("Sync classification override rejected.");
       
-      // Instantly trigger re-pull
       await fetchEmails();
     } catch (err) {
       console.error(err);
     }
   };
 
-  // Render initialization loading screen
   if (initializing) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-900 text-white">
@@ -240,79 +215,77 @@ export default function App() {
     );
   }
 
-  // Render Login screen if no valid session
   if (!token || !user) {
     return <Login onSuccess={handleLoginSuccess} />;
   }
 
+  // ✅ ThemeProvider MUST wrap the entire return JSX
   return (
-    <div className="flex bg-slate-100 min-h-screen text-slate-800 font-sans antialiased">
-      {/* Navigation sidebar */}
-      <Sidebar
-        user={user}
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        onLogout={handleLogout}
-        syncing={syncing}
-        onManualSync={handleManualSync}
-      />
-
-      {/* Main dashboard content */}
-      <main className="flex-1 p-8 overflow-y-auto h-screen relative scrollbar">
-        {panelError && (
-          <div className="mb-6 flex items-start space-x-2.5 p-4 rounded-xl bg-amber-50 text-amber-800 text-xs font-semibold border border-amber-200">
-            <AlertCircle className="h-4.5 w-4.5 shrink-0" />
-            <span>{panelError}</span>
-          </div>
-        )}
-
-        {/* Tab Router Switch Panel */}
-        {activeTab === "otps" && (
-          <OtpFeed
-            emails={emails}
-            loading={loadingEmails}
-            onRefresh={fetchEmails}
-            onSelectEmail={setSelectedEmail}
-          />
-        )}
-
-        {activeTab === "inbox" && user.role === "ADMIN" && (
-          <FullInbox
-            emails={emails}
-            loading={loadingEmails}
-            onRefresh={fetchEmails}
-            onClassify={handleClassify}
-            onSelectEmail={setSelectedEmail}
-            token={token}
-          />
-        )}
-
-        {activeTab === "mailboxes" && user.role === "ADMIN" && (
-          <ClientManager
-            clients={clients}
-            loading={loadingClients}
-            onRefresh={fetchClients}
-            token={token}
-          />
-        )}
-
-        {activeTab === "audit" && user.role === "ADMIN" && (
-          <AuditLogger
-            logs={logs}
-            loading={loadingLogs}
-          />
-        )}
-      </main>
-
-      {/* Modal overlays */}
-      {selectedEmail && (
-        <EmailModal
-          email={selectedEmail}
-          onClose={() => setSelectedEmail(null)}
-          onClassify={user.role === "ADMIN" ? (action) => handleClassify(selectedEmail.id, action) : undefined}
-          userRole={user.role}
+    <ThemeProvider>
+      <div className="flex bg-slate-100 dark:bg-slate-900 min-h-screen text-slate-800 dark:text-slate-100 font-sans antialiased transition-colors">
+        <Sidebar
+          user={user}
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          onLogout={handleLogout}
+          syncing={syncing}
+          onManualSync={handleManualSync}
         />
-      )}
-    </div>
+
+        <main className="flex-1 p-8 overflow-y-auto h-screen relative scrollbar">
+          {panelError && (
+            <div className="mb-6 flex items-start space-x-2.5 p-4 rounded-xl bg-amber-50 text-amber-800 text-xs font-semibold border border-amber-200">
+              <AlertCircle className="h-4.5 w-4.5 shrink-0" />
+              <span>{panelError}</span>
+            </div>
+          )}
+
+          {activeTab === "otps" && (
+            <OtpFeed
+              emails={emails}
+              loading={loadingEmails}
+              onRefresh={fetchEmails}
+              onSelectEmail={setSelectedEmail}
+            />
+          )}
+
+          {activeTab === "inbox" && user.role === "ADMIN" && (
+            <FullInbox
+              emails={emails}
+              loading={loadingEmails}
+              onRefresh={fetchEmails}
+              onClassify={handleClassify}
+              onSelectEmail={setSelectedEmail}
+              token={token}
+            />
+          )}
+
+          {activeTab === "mailboxes" && user.role === "ADMIN" && (
+            <ClientManager
+              clients={clients}
+              loading={loadingClients}
+              onRefresh={fetchClients}
+              token={token}
+            />
+          )}
+
+          {activeTab === "audit" && user.role === "ADMIN" && (
+            <AuditLogger
+              logs={logs}
+              loading={loadingLogs}
+            />
+          )}
+        </main>
+
+        {selectedEmail && (
+          <EmailModal
+            email={selectedEmail}
+            onClose={() => setSelectedEmail(null)}
+            onClassify={user.role === "ADMIN" ? (action) => handleClassify(selectedEmail.id, action) : undefined}
+            userRole={user.role}
+          />
+        )}
+      </div>
+    </ThemeProvider>
   );
 }
