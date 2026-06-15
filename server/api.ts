@@ -3,7 +3,6 @@ import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { query, logAudit } from "./db.js";
 import { encrypt } from "./crypto.js";
-import { ImapFlow } from "imapflow";
 import { runPollingTick } from "./polling.js";
 
 export const apiRouter = express.Router();
@@ -56,7 +55,7 @@ export function requireAdmin(req: any, res: any, next: any) {
 
 // --- AUTHENTICATION ---
 
-// ✅ OAuth Initiation Route (NEW)
+// ✅ OAuth Initiation Route
 apiRouter.get("/oauth/google", (req, res) => {
   const scopes = [
     "https://www.googleapis.com/auth/gmail.modify",
@@ -79,7 +78,7 @@ apiRouter.get("/oauth/google", (req, res) => {
   res.redirect(authUrl);
 });
 
-// ✅ OAuth Callback Route (MERGED - Single Version)
+// ✅ OAuth Callback Route (FIXED - String ID Generation)
 apiRouter.get("/oauth/google/callback", async (req, res) => {
   const { code } = req.query;
 
@@ -134,15 +133,28 @@ apiRouter.get("/oauth/google/callback", async (req, res) => {
 
     let user;
     if (existingUser.rows.length === 0) {
-      // Create admin user
+      // ✅ GENERATE STRING ID (Matching your existing schema like "work_2")
+      const maxIdResult = await query("SELECT id FROM users WHERE id LIKE 'admin_%' ORDER BY id DESC LIMIT 1");
+      let nextIdNum = 1;
+      
+      if (maxIdResult.rows.length > 0) {
+        const lastId = maxIdResult.rows[0].id; // e.g., "admin_3"
+        const lastNum = parseInt(lastId.split('_')[1], 10); // e.g., 3
+        nextIdNum = lastNum + 1; // e.g., 4
+      }
+      
+      const generatedId = `admin_${nextIdNum}`; // e.g., "admin_4"
+      
       const result = await query(
-        `INSERT INTO users (name, email, password_hash, role, is_2fa_enabled) 
-         VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-        [name, clientEmail, "", "ADMIN", false]
+        `INSERT INTO users (id, name, email, password_hash, role, is_2fa_enabled) 
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+        [generatedId, name, clientEmail, "", "ADMIN", false]
       );
       user = result.rows[0];
+      console.log(`[OAuth] Created new admin user with ID ${generatedId}: ${clientEmail}`);
     } else {
       user = existingUser.rows[0];
+      console.log(`[OAuth] Existing admin user: ${user.id} (${clientEmail})`);
     }
 
     // ✅ Store OAuth tokens in clients table for Gmail access
@@ -194,10 +206,23 @@ apiRouter.post("/auth/register", async (req, res) => {
     }
 
     const hash = await bcrypt.hash(password, 10);
+    
+    // ✅ GENERATE STRING ID for new users
+    const maxIdResult = await query(`SELECT id FROM users WHERE id LIKE '${role.toLowerCase()}_%' ORDER BY id DESC LIMIT 1`);
+    let nextIdNum = 1;
+    
+    if (maxIdResult.rows.length > 0) {
+      const lastId = maxIdResult.rows[0].id;
+      const lastNum = parseInt(lastId.split('_')[1], 10);
+      nextIdNum = lastNum + 1;
+    }
+    
+    const generatedId = `${role.toLowerCase()}_${nextIdNum}`;
+    
     const result = await query(
-      `INSERT INTO users (name, email, password_hash, role, is_2fa_enabled) 
-       VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, role, is_2fa_enabled`,
-      [name, email, hash, role, false]
+      `INSERT INTO users (id, name, email, password_hash, role, is_2fa_enabled) 
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, email, role, is_2fa_enabled`,
+      [generatedId, name, email, hash, role, false]
     );
 
     const newUser = result.rows[0];
