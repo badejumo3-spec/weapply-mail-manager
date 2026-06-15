@@ -1,15 +1,15 @@
 import React, { useState, useEffect, useRef } from "react";
 import { EmailMessage } from "../types";
+import EmailModal from "./EmailModal";
 import { useAuth } from "./AuthContext";
 import { getTimeRemaining, formatCountdown } from "../utils/time";
 import { 
   Mail, Inbox, Eye, Clock, Key, Link as LinkIcon, ShieldAlert, ShieldCheck, 
-  ArrowRight, Shield, CheckCircle, RefreshCw, AlertCircle, ExternalLink, X, HelpCircle
+  RefreshCw
 } from "lucide-react";
-import { motion, AnimatePresence } from "motion/react";
 
 export function FullInboxPage() {
-  const { apiFetch } = useAuth();
+  const { apiFetch, user } = useAuth();
   const [emails, setEmails] = useState<EmailMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -19,12 +19,12 @@ export function FullInboxPage() {
   const [previousEmailIds, setPreviousEmailIds] = useState<Set<string>>(new Set());
   const [newEmailIds, setNewEmailIds] = useState<Set<string>>(new Set());
   
-  // Preserve scroll position during refresh
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const scrollPositionRef = useRef<number>(0);
+  const isInitialLoad = useRef(true);
 
   const fetchEmails = async (showSpinner = false) => {
-    // Save scroll position before refresh
+    // Save scroll position
     if (tableContainerRef.current) {
       scrollPositionRef.current = tableContainerRef.current.scrollTop;
     }
@@ -35,7 +35,7 @@ export function FullInboxPage() {
       if (res.ok) {
         const data = await res.json();
         
-        // Track which emails are new for animation
+        // Track new emails for animation
         const currentIds = new Set(data.map((e: EmailMessage) => e.id));
         const newIds = new Set(data.filter((e: EmailMessage) => !previousEmailIds.has(e.id)).map((e: EmailMessage) => e.id));
         
@@ -43,16 +43,22 @@ export function FullInboxPage() {
         setPreviousEmailIds(currentIds);
         setNewEmailIds(newIds);
         
-        // Clear new email animation flag after 1 second
+        // Clear animation flag after 1 second
         setTimeout(() => setNewEmailIds(new Set()), 1000);
+      } else {
+        console.error("API returned error:", res.status);
       }
     } catch (err) {
       console.error("Failed to fetch full inbox:", err);
     } finally {
-      setLoading(false);
+      // Only set loading false on initial load
+      if (isInitialLoad.current) {
+        setLoading(false);
+        isInitialLoad.current = false;
+      }
       setIsSyncing(false);
       
-      // Restore scroll position after refresh
+      // Restore scroll position
       if (tableContainerRef.current) {
         tableContainerRef.current.scrollTop = scrollPositionRef.current;
       }
@@ -173,7 +179,7 @@ export function FullInboxPage() {
           </span>
           <input
             type="text"
-            placeholder="Search sender, subject, extracted codes or verification links..."
+            placeholder="Search sender, recipient, subject, or OTP..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full pl-9 pr-4 py-2 bg-gray-50 border border-gray-250 rounded-lg text-xs font-sans outline-hidden focus:bg-white focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600 transition-all font-medium text-gray-900 placeholder:text-gray-400"
@@ -211,7 +217,7 @@ export function FullInboxPage() {
         </div>
       </div>
 
-      {/* Email Table Collection */}
+      {/* Email Table */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-xs overflow-hidden">
         {loading ? (
           <div className="p-16 text-center">
@@ -242,303 +248,105 @@ export function FullInboxPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-150 text-xs font-sans text-gray-900">
-                <AnimatePresence>
-                  {filteredEmails.map((email) => (
-                    <motion.tr
-                      key={email.id}
-                      initial={newEmailIds.has(email.id) ? { opacity: 0, y: -20 } : false}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.3 }}
-                      onClick={() => setSelectedEmail(email)}
-                      className="hover:bg-indigo-50/20 transition-colors group cursor-pointer"
-                    >
-                      <td className="px-5 py-3.5">
-                        <div className="font-semibold text-gray-900 group-hover:text-indigo-600 transition-colors truncate max-w-xs">
-                          {email.sender}
+                {filteredEmails.map((email) => (
+                  <tr
+                    key={email.id}
+                    onClick={() => setSelectedEmail(email)}
+                    className={`hover:bg-indigo-50/20 transition-colors group cursor-pointer ${
+                      newEmailIds.has(email.id) ? "animate-fade-in" : ""
+                    }`}
+                  >
+                    <td className="px-5 py-3.5">
+                      <div className="font-semibold text-gray-900 group-hover:text-indigo-600 transition-colors truncate max-w-xs">
+                        {email.sender}
+                      </div>
+                      {email.recipient_email && (
+                        <div className="text-[10px] text-indigo-600 font-mono mt-0.5 max-w-xs truncate" title={email.recipient_email}>
+                          To: {email.recipient_email}
                         </div>
-                        {email.recipient_email && (
-                          <div className="text-[10px] text-indigo-600 font-mono mt-0.5 max-w-xs truncate" title={email.recipient_email}>
-                            To: {email.recipient_email}
-                          </div>
-                        )}
-                        <div className="text-[10px] text-slate-400 mt-0.5 font-mono">
-                          UID: {email.id}
+                      )}
+                      <div className="text-[10px] text-slate-400 mt-0.5 font-mono">
+                        UID: {email.id}
+                      </div>
+                    </td>
+                    <td className="px-5 py-3.5">
+                      <div className="font-medium text-slate-800 truncate max-w-xs">
+                        {email.subject}
+                      </div>
+                    </td>
+                    <td className="px-5 py-3.5 whitespace-nowrap">
+                      <div className="flex items-center gap-1 text-slate-700">
+                        <Clock className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+                        <span>{new Date(email.received_at).toLocaleTimeString()}</span>
+                      </div>
+                      <div className={`text-[10px] font-mono mt-0.5 font-bold ${
+                        calculateExpiresIn(email.expires_at) === "Expired" ? "text-rose-600" : "text-amber-600"
+                      }`}>
+                        {calculateExpiresIn(email.expires_at)}
+                      </div>
+                    </td>
+                    <td className="px-5 py-3.5">
+                      {email.otp_code && (
+                        <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-sm bg-indigo-50 text-indigo-700 font-mono text-[10px] font-semibold border border-indigo-100">
+                          <Key className="h-3 w-3 text-indigo-500" />
+                          <span>Code: {email.otp_code}</span>
                         </div>
-                      </td>
-                      <td className="px-5 py-3.5">
-                        <div className="font-medium text-slate-800 truncate max-w-xs">
-                          {email.subject}
+                      )}
+                      {!email.otp_code && email.verification_link && (
+                        <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-sm bg-teal-50 text-teal-700 font-mono text-[10px] font-semibold border border-teal-100 max-w-[200px] truncate">
+                          <LinkIcon className="h-3 w-3 text-teal-500 shrink-0" />
+                          <span>Has Verify Link</span>
                         </div>
-                      </td>
-                      <td className="px-5 py-3.5 whitespace-nowrap">
-                        <div className="flex items-center gap-1 text-slate-700">
-                          <Clock className="h-3.5 w-3.5 text-gray-400 shrink-0" />
-                          <span>{new Date(email.received_at).toLocaleTimeString()}</span>
-                        </div>
-                        <div className={`text-[10px] font-mono mt-0.5 font-bold ${
-                          calculateExpiresIn(email.expires_at) === "Expired" ? "text-rose-600" : "text-amber-600"
-                        }`}>
-                          {calculateExpiresIn(email.expires_at)}
-                        </div>
-                      </td>
-                      <td className="px-5 py-3.5">
-                        {email.otp_code && (
-                          <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-sm bg-indigo-50 text-indigo-700 font-mono text-[10px] font-semibold border border-indigo-100">
-                            <Key className="h-3 w-3 text-indigo-500" />
-                            <span>Code: {email.otp_code}</span>
-                          </div>
-                        )}
-                        {!email.otp_code && email.verification_link && (
-                          <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-sm bg-teal-50 text-teal-700 font-mono text-[10px] font-semibold border border-teal-100 max-w-[200px] truncate">
-                            <LinkIcon className="h-3 w-3 text-teal-500 shrink-0" />
-                            <span>Has Verify Link</span>
-                          </div>
-                        )}
-                        {!email.otp_code && !email.verification_link && (
-                          <span className="text-gray-400 text-[10px] italic">No active tokens</span>
-                        )}
-                      </td>
-                      <td className="px-5 py-3.5 whitespace-nowrap">
-                        {getStatusBadge(email.classification_status, email.visibility_level)}
-                      </td>
-                      <td className="px-5 py-3.5 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex justify-end gap-1.5">
-                          {email.visibility_level === "tier1_only" ? (
-                            <button
-                              onClick={() => handleUpdateStatus(email.id, "send_to_tier2")}
-                              className="px-2.5 py-1 text-[10px] font-bold bg-indigo-650 hover:bg-indigo-700 text-white rounded transition-colors cursor-pointer shadow-xs"
-                            >
-                              Send to Tier 2
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => handleUpdateStatus(email.id, "pull_back")}
-                              className="px-2.5 py-1 text-[10px] font-bold bg-amber-500 hover:bg-amber-600 text-white rounded transition-colors cursor-pointer shadow-xs"
-                            >
-                              Pull Back
-                            </button>
-                          )}
+                      )}
+                      {!email.otp_code && !email.verification_link && (
+                        <span className="text-gray-400 text-[10px] italic">No active tokens</span>
+                      )}
+                    </td>
+                    <td className="px-5 py-3.5 whitespace-nowrap">
+                      {getStatusBadge(email.classification_status, email.visibility_level)}
+                    </td>
+                    <td className="px-5 py-3.5 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex justify-end gap-1.5">
+                        {email.visibility_level === "tier1_only" ? (
                           <button
-                            onClick={() => handleUpdateStatus(email.id, "admin_only")}
-                            className="px-2 py-1 text-[10px] font-bold border border-gray-300 hover:bg-gray-55 text-slate-700 rounded transition-colors cursor-pointer bg-white"
+                            onClick={() => handleUpdateStatus(email.id, "send_to_tier2")}
+                            className="px-2.5 py-1 text-[10px] font-bold bg-indigo-650 hover:bg-indigo-700 text-white rounded transition-colors cursor-pointer shadow-xs"
                           >
-                            Strict Admin Only
+                            Send to Tier 2
                           </button>
-                        </div>
-                      </td>
-                    </motion.tr>
-                  ))}
-                </AnimatePresence>
+                        ) : (
+                          <button
+                            onClick={() => handleUpdateStatus(email.id, "pull_back")}
+                            className="px-2.5 py-1 text-[10px] font-bold bg-amber-500 hover:bg-amber-600 text-white rounded transition-colors cursor-pointer shadow-xs"
+                          >
+                            Pull Back
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleUpdateStatus(email.id, "admin_only")}
+                          className="px-2 py-1 text-[10px] font-bold border border-gray-300 hover:bg-gray-55 text-slate-700 rounded transition-colors cursor-pointer bg-white"
+                        >
+                          Strict Admin Only
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
         )}
       </div>
 
-      {/* Safe HTML Custom rendering email View Modal */}
-      <AnimatePresence>
-        {selectedEmail && (
-          <div
-            onClick={() => setSelectedEmail(null)}
-            className="fixed inset-0 bg-slate-950/60 flex items-center justify-center p-4 z-50 backdrop-blur-xs"
-          >
-            <motion.div 
-              onClick={(e) => e.stopPropagation()}
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white rounded-2xl border border-gray-200 shadow-2xl overflow-hidden max-w-4xl w-full flex flex-col max-h-[90vh]"
-            >
-              {/* Modal Header */}
-              <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <div className="p-1.5 bg-indigo-500/10 text-indigo-400 border border-indigo-400/20 rounded-md">
-                    <Mail className="h-4 w-4" />
-                  </div>
-                  <div>
-                    <h2 className="text-sm font-bold tracking-tight">{selectedEmail.subject}</h2>
-                    <p className="text-[10px] text-slate-350 mt-0.5 font-sans">
-                      From: <span className="text-white font-medium">{selectedEmail.sender}</span>
-                      {selectedEmail.recipient_email && (
-                        <span className="ml-2 pl-2 border-l border-slate-700">
-                          To: <span className="text-indigo-300 font-mono font-bold">{selectedEmail.recipient_email}</span>
-                        </span>
-                      )}
-                    </p>
-                  </div>
-                </div>
-                <button 
-                  onClick={() => setSelectedEmail(null)}
-                  className="p-1 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors cursor-pointer"
-                >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-
-              {/* Modal Body Container */}
-              <div className="p-6 overflow-y-auto flex-1 space-y-5">
-                
-                {/* Visual Metadata Summary Block */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-slate-50 rounded-xl p-4 border border-gray-200">
-                  <div>
-                    <span className="text-[9px] uppercase font-mono font-bold text-gray-400 block">Received At</span>
-                    <span className="text-xs font-semibold text-slate-800">{new Date(selectedEmail.received_at).toLocaleString()}</span>
-                  </div>
-                  <div>
-                    <span className="text-[9px] uppercase font-mono font-bold text-gray-400 block">Data Lifecycle Limits</span>
-                    <span className="text-xs font-semibold text-amber-600 font-mono flex items-center gap-1 mt-0.5">
-                      <Clock className="h-3.5 w-3.5 text-amber-500 shrink-0" />
-                      Hard Delete in: {calculateExpiresIn(selectedEmail.expires_at)}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-[9px] uppercase font-mono font-bold text-gray-400 block">Clearance status</span>
-                    <div className="mt-0.5">
-                      {getStatusBadge(selectedEmail.classification_status, selectedEmail.visibility_level)}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Extracted payload Highlights */}
-                {(selectedEmail.otp_code || selectedEmail.verification_link) && (
-                  <div className="bg-indigo-50/50 p-4 rounded-xl border border-indigo-125 grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {selectedEmail.otp_code && (
-                      <div className="bg-white p-3 rounded-lg border border-indigo-100 flex items-center justify-between">
-                        <div>
-                          <span className="text-[9px] uppercase font-mono font-bold font-semibold text-indigo-500">Auto-Extracted OTP CODE</span>
-                          <div className="text-2xl font-mono tracking-wider font-extrabold text-indigo-700 mt-1">{selectedEmail.otp_code}</div>
-                        </div>
-                        <button 
-                          onClick={() => {
-                            navigator.clipboard.writeText(selectedEmail.otp_code || "");
-                            alert("OTP copied safely.");
-                          }}
-                          className="px-2.5 py-1.5 text-[10px] font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded transition-colors cursor-pointer shadow-xs"
-                        >
-                          Copy Code
-                        </button>
-                      </div>
-                    )}
-
-                    {selectedEmail.verification_link && (
-                      <div className="bg-white p-3 rounded-lg border border-indigo-100 flex flex-col justify-between">
-                        <div>
-                          <span className="text-[9px] uppercase font-mono font-bold font-semibold text-indigo-400">Extracted verification link</span>
-                          <div className="text-xs font-mono font-semibold text-blue-600 truncate mt-1">{selectedEmail.verification_link}</div>
-                        </div>
-                        <a 
-                          href={selectedEmail.verification_link}
-                          target="_blank" 
-                          rel="noopener noreferrer"
-                          className="mt-2 text-[10px] font-bold text-indigo-600 hover:text-indigo-750 inline-flex items-center gap-1 hover:underline"
-                        >
-                          Follow verification link <ExternalLink className="h-3 w-3" />
-                        </a>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Email Body Displays */}
-                <div className="space-y-4">
-                  <div className="border border-gray-200 rounded-xl overflow-hidden">
-                    <div className="bg-slate-100 px-4 py-2 border-b border-gray-200 flex items-center justify-between">
-                      <span className="text-[10px] font-mono font-bold text-slate-600 uppercase">Sanitized HTML Render (Safe Sandbox)</span>
-                    </div>
-                    <div className="h-64 bg-white relative">
-                      <iframe
-                        srcDoc={`
-                          <!DOCTYPE html>
-                          <html>
-                          <head>
-                            <style>
-                              body {
-                                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-                                font-size: 13px;
-                                line-height: 1.6;
-                                color: #1e293b;
-                                padding: 16px;
-                                margin: 0;
-                              }
-                              a { color: #4f46e5; text-decoration: underline; }
-                              pre { background: #f1f5f9; padding: 8px; border-radius: 4px; overflow: auto; }
-                            </style>
-                          </head>
-                          <body>
-                            ${selectedEmail.full_body_html}
-                          </body>
-                          </html>
-                        `}
-                        className="w-full h-full border-none"
-                        title="Secure Render sandbox"
-                        referrerPolicy="no-referrer"
-                        sandbox="allow-popups allow-popups-to-escape-sandbox"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="border border-gray-200 rounded-xl overflow-hidden">
-                    <div className="bg-slate-100 px-4 py-2 border-b border-gray-200">
-                      <span className="text-[10px] font-mono font-bold text-slate-600 uppercase">Raw plain text fallback</span>
-                    </div>
-                    <div className="p-4 bg-slate-50 text-slate-800 font-mono text-[11px] leading-relaxed max-h-48 overflow-y-auto whitespace-pre-wrap selection:bg-indigo-125">
-                      {selectedEmail.full_body_text ? selectedEmail.full_body_text : "No plain text fallback content available."}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Overriding Administrative Actions Block */}
-                <div className="border border-gray-200 rounded-xl p-4 bg-slate-50/50 flex flex-col md:flex-row items-center justify-between gap-4">
-                  <div className="flex items-start gap-2 max-w-md">
-                    <HelpCircle className="h-4 w-4 text-indigo-500 shrink-0 mt-0.5" />
-                    <div>
-                      <h4 className="text-xs font-bold text-gray-900">Manual Re-Classification Handlers</h4>
-                      <p className="text-[10px] text-gray-500 mt-0.5 leading-normal">
-                        Override the automated filtering status. Setting to Tier 2 will immediately propagate this email's core OTP elements to worker streams. Pulling back restricts visibility to authorized admins only.
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 self-end md:self-center">
-                    {selectedEmail.visibility_level === "tier1_only" ? (
-                      <button
-                        onClick={() => handleUpdateStatus(selectedEmail.id, "send_to_tier2")}
-                        className="px-4 py-2 text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors cursor-pointer shadow-xs"
-                      >
-                        Send to Tier 2
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => handleUpdateStatus(selectedEmail.id, "pull_back")}
-                        className="px-4 py-2 text-xs font-semibold bg-amber-500 hover:bg-amber-600 text-white rounded-lg transition-colors cursor-pointer shadow-xs"
-                      >
-                        Pull Back / Redact From Tier 2
-                      </button>
-                    )}
-                    <button
-                      onClick={() => handleUpdateStatus(selectedEmail.id, "admin_only")}
-                      className="px-3 py-2 text-xs font-bold border border-gray-300 hover:bg-gray-100 text-slate-700 rounded-lg transition-colors cursor-pointer bg-white"
-                    >
-                      Strict Admin Restriction
-                    </button>
-                  </div>
-                </div>
-
-              </div>
-              
-              {/* Modal Footer */}
-              <div className="bg-slate-50 border-t border-gray-200 px-6 py-4 flex justify-end">
-                <button
-                  onClick={() => setSelectedEmail(null)}
-                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-semibold cursor-pointer transition-colors shadow-xs"
-                >
-                  Close Message Explorer
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
+      {/* ✅ USE EmailModal COMPONENT INSTEAD OF INLINE MODAL */}
+      {selectedEmail && (
+        <EmailModal
+          email={selectedEmail}
+          onClose={() => setSelectedEmail(null)}
+          onClassify={handleUpdateStatus}
+          userRole={user?.role || "WORKER"}
+        />
+      )}
     </div>
   );
 }
