@@ -55,12 +55,13 @@ export function requireAdmin(req: any, res: any, next: any) {
 
 // --- AUTHENTICATION ---
 
-// ✅ OAuth Initiation Route
+// ✅ OAuth Initiation Route (LOGIN ONLY - Minimal Scopes)
 apiRouter.get("/oauth/google", (req, res) => {
+  // ✅ LOGIN SCOPES ONLY - No Gmail access, no user cap
   const scopes = [
-    "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/userinfo.email",
-    "https://www.googleapis.com/auth/userinfo.profile",
+    "openid",
+    "email",
+    "profile",
   ];
 
   const authUrl =
@@ -78,7 +79,7 @@ apiRouter.get("/oauth/google", (req, res) => {
   res.redirect(authUrl);
 });
 
-// ✅ OAuth Callback Route (FIXED - String ID Generation)
+// ✅ OAuth Callback Route (CLEANED - No Duplicates)
 apiRouter.get("/oauth/google/callback", async (req, res) => {
   const { code } = req.query;
 
@@ -106,9 +107,6 @@ apiRouter.get("/oauth/google/callback", async (req, res) => {
 
     const tokenData = await tokenResponse.json();
     const accessToken = tokenData.access_token;
-    const refreshToken = tokenData.refresh_token;
-    const expiresIn = tokenData.expires_in || 3600;
-    const expiryTimestamp = new Date(Date.now() + expiresIn * 1000);
 
     const profileResponse = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -119,64 +117,50 @@ apiRouter.get("/oauth/google/callback", async (req, res) => {
     }
 
     const profileData = await profileResponse.json();
-    const clientEmail = profileData.email;
-    const name = profileData.name || clientEmail.split("@")[0];
+    const email = profileData.email;
+    const name = profileData.name || email.split("@")[0];
 
-    // ✅ Security Check: Only whitelisted emails can OAuth login
-    if (!ADMIN_EMAILS.includes(clientEmail)) {
-      await logAudit(clientEmail, "UNKNOWN", "OAuth login attempt blocked - email not in admin whitelist.", "FAILED");
-      return res.redirect("/?oauth=denied");
-    }
+    // ✅ Determine Role Based on Whitelist
+    const isAdmin = ADMIN_EMAILS.includes(email);
+    const role = isAdmin ? "ADMIN" : "WORKER";
 
     // ✅ Check if user exists in DB
-    const existingUser = await query("SELECT * FROM users WHERE email = $1", [clientEmail]);
+    const existingUser = await query("SELECT * FROM users WHERE email = $1", [email]);
 
     let user;
     if (existingUser.rows.length === 0) {
-      // ✅ GENERATE STRING ID (Matching your existing schema like "work_2")
-      const maxIdResult = await query("SELECT id FROM users WHERE id LIKE 'admin_%' ORDER BY id DESC LIMIT 1");
+      const prefix = isAdmin ? "admin" : "worker";
+      const maxIdResult = await query(`SELECT id FROM users WHERE id LIKE '${prefix}_%' ORDER BY id DESC LIMIT 1`);
       let nextIdNum = 1;
       
       if (maxIdResult.rows.length > 0) {
-        const lastId = maxIdResult.rows[0].id; // e.g., "admin_3"
-        const lastNum = parseInt(lastId.split('_')[1], 10); // e.g., 3
-        nextIdNum = lastNum + 1; // e.g., 4
+        const lastId = maxIdResult.rows[0].id;
+        const lastNum = parseInt(lastId.split('_')[1], 10);
+        nextIdNum = lastNum + 1;
       }
       
-      const generatedId = `admin_${nextIdNum}`; // e.g., "admin_4"
+      const generatedId = `${prefix}_${nextIdNum}`;
       
       const result = await query(
         `INSERT INTO users (id, name, email, password_hash, role, is_2fa_enabled) 
          VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-        [generatedId, name, clientEmail, "", "ADMIN", false]
+        [generatedId, name, email, "", role, false]
       );
       user = result.rows[0];
-      console.log(`[OAuth] Created new admin user with ID ${generatedId}: ${clientEmail}`);
+      console.log(`[OAuth] Created new ${role} user: ${email}`);
     } else {
       user = existingUser.rows[0];
-      console.log(`[OAuth] Existing admin user: ${user.id} (${clientEmail})`);
+      console.log(`[OAuth] Existing ${user.role} user: ${email}`);
     }
 
-    // ✅ Store OAuth tokens in clients table for Gmail access
-    await query(
-      `INSERT INTO clients (client_name, email, provider, auth_type, oauth_access_token, oauth_refresh_token, oauth_token_expiry, status)
-       VALUES ($1, $2, 'google', 'oauth', $3, $4, $5, 'connected')
-       ON CONFLICT (email) DO UPDATE SET
-         oauth_access_token = EXCLUDED.oauth_access_token,
-         oauth_refresh_token = EXCLUDED.oauth_refresh_token,
-         oauth_token_expiry = EXCLUDED.oauth_token_expiry,
-         status = 'connected'`,
-      [name, clientEmail, accessToken, refreshToken || "", expiryTimestamp]
-    );
-
-    // ✅ Generate JWT for app session
+    // ✅ Generate JWT for app session (Change "24h" to "7d" if you want longer sessions)
     const appToken = jwt.sign(
       { id: user.id, name: user.name, email: user.email, role: user.role },
       JWT_SECRET,
       { expiresIn: "24h" }
     );
 
-    await logAudit(clientEmail, "ADMIN", "Authorized successfully via Google OAuth 2.0 flow.", "SUCCESS");
+    await logAudit(email, user.role, `Logged in via Google OAuth 2.0 as ${role}.`, "SUCCESS");
 
     // ✅ Redirect to app with token
     res.redirect(`/?token=${appToken}&oauth=success`);
@@ -186,8 +170,8 @@ apiRouter.get("/oauth/google/callback", async (req, res) => {
     res.redirect("/?oauth=error");
   }
 });
-
-// Register standard users (Admin manually adds, or self-registration fallback)
+    
+// Register standard users (email/password users
 apiRouter.post("/auth/register", async (req, res) => {
   const { name, email, password, role } = req.body;
 
@@ -367,10 +351,10 @@ apiRouter.post("/clients/imap", authenticateToken, requireAdmin, async (req: any
   }
 });
 
-// Generate link for Gmail API Authentication via OAuth 2.0
+// ✅ Client Mailbox Connection (KEEPS Gmail Scopes)
 apiRouter.get("/clients/oauth-link", authenticateToken, requireAdmin, (req, res) => {
   const scopes = [
-    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.modify",  // ← For client mailboxes ONLY
     "https://www.googleapis.com/auth/userinfo.email",
   ];
 
