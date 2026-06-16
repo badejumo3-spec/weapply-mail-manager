@@ -122,7 +122,7 @@ export function extractAuthArtifacts(subject: string, text: string): ExtractionR
     }
   }
 
-  // 5. Extract Verification Link
+  // 5. Extract Verification Link (+2 points if valid)
   let extractedLink: string | null = null;
   const urlRegex = /https?:\/\/[^\s"'<>]+/gi;
   const urlMatches = text.match(urlRegex) || [];
@@ -158,6 +158,11 @@ export function extractAuthArtifacts(subject: string, text: string): ExtractionR
         break;
       }
     }
+  }
+
+  // ✅ Add points for valid verification link
+  if (extractedLink) {
+    score += 2;
   }
 
   // ✅ 6. Gate promotion based on score threshold (>= 3 points for Tier 2)
