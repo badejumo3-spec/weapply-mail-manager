@@ -23,46 +23,42 @@ export function FullInboxPage() {
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const scrollPositionRef = useRef<number>(0);
   const isInitialLoad = useRef(true);
+  const isClosingRef = useRef(false);
 
-  const fetchEmails = async (showSpinner = false) => {
-    if (tableContainerRef.current) {
-      scrollPositionRef.current = tableContainerRef.current.scrollTop;
-    }
-
-    if (showSpinner) setIsSyncing(true);
-    try {
-      const res = await apiFetch("/api/emails");
-      if (res.ok) {
-        const data = await res.json();
-        
-        const currentIds = new Set(data.map((e: EmailMessage) => e.id));
-        const newIds = new Set(data.filter((e: EmailMessage) => !previousEmailIds.has(e.id)).map((e: EmailMessage) => e.id));
-        
-        setEmails(data);
-        setPreviousEmailIds(currentIds);
-        setNewEmailIds(newIds);
-        
-        // ✅ 2. Added Sound Playback Logic
-        if (newIds.size > 0 && user?.role === "ADMIN") {
-          playNotificationSound();
-        }
-        
-        setTimeout(() => setNewEmailIds(new Set()), 1000);
-      }
-    } catch (err) {
-      console.error("Failed to fetch full inbox:", err);
-    } finally {
-      if (isInitialLoad.current) {
-        setLoading(false);
-        isInitialLoad.current = false;
-      }
-      setIsSyncing(false);
+const fetchEmails = async (showSpinner = false) => {
+  try {
+    const res = await apiFetch("/api/emails");
+    if (res.ok) {
+      const data = await res.json();
       
-      if (tableContainerRef.current) {
-        tableContainerRef.current.scrollTop = scrollPositionRef.current;
+      const currentIds = new Set(data.map((e: EmailMessage) => e.id));
+      const newIds = new Set(data.filter((e: EmailMessage) => !previousEmailIds.has(e.id)).map((e: EmailMessage) => e.id));
+      
+      setEmails(data);
+      setPreviousEmailIds(currentIds);
+      setNewEmailIds(newIds);
+      
+      // ✅ 2. Added Sound Playback Logic
+      if (newIds.size > 0 && user?.role === "ADMIN") {
+        playNotificationSound();
       }
+      
+      setTimeout(() => setNewEmailIds(new Set()), 1000);
     }
-  };
+  } catch (err) {
+    console.error("Failed to fetch full inbox:", err);
+  } finally {
+    if (isInitialLoad.current) {
+      setLoading(false);
+      isInitialLoad.current = false;
+    }
+    setIsSyncing(false);
+    
+    if (tableContainerRef.current) {
+      tableContainerRef.current.scrollTop = scrollPositionRef.current;
+    }
+  }
+};
 
   useEffect(() => {
     fetchEmails();
@@ -71,23 +67,25 @@ export function FullInboxPage() {
   }, []);
 
   const handleUpdateStatus = async (
-    emailId: string,
-    action: "send_to_tier2" | "pull_back" | "admin_only"
-  ) => {
-    try {
-      const res = await apiFetch(`/api/emails/${emailId}/classify`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action })
-      });
+  emailId: string,
+  action: "send_to_tier2" | "pull_back" | "admin_only"
+) => {
+  try {
+    const res = await apiFetch(`/api/emails/${emailId}/classify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action })
+    });
 
-      if (res.ok) {
-        await fetchEmails(false);
-      }
-    } catch (err) {
-      console.error("Failed to update status:", err);
+    if (res.ok) {
+      // ✅ Clear selected email BEFORE refreshing to prevent modal reopen
+      setSelectedEmail(null);
+      await fetchEmails(false);
     }
-  };
+  } catch (err) {
+    console.error("Failed to update status:", err);
+  }
+};
 
   const calculateExpiresIn = (expiresAtStr: string) => {
     const diff = getTimeRemaining(expiresAtStr);
@@ -250,11 +248,15 @@ export function FullInboxPage() {
                 {filteredEmails.map((email) => (
                   <tr
                     key={email.id}
-                    onClick={() => setSelectedEmail(email)}
-                    className={`hover:bg-indigo-50/20 transition-colors group cursor-pointer ${
-                      newEmailIds.has(email.id) ? "animate-fade-in" : ""
-                    }`}
-                  >
+  		   onClick={() => {
+    		    // ✅ Prevent opening if modal is currently closing
+    		    if (isClosingRef.current) return;
+                    setSelectedEmail(email);
+                 }}
+                 className={`hover:bg-indigo-50/20 transition-colors group cursor-pointer ${
+                   newEmailIds.has(email.id) ? "animate-fade-in" : ""
+                 }`}
+                >
                     <td className="px-5 py-3.5">
                       <div className="font-semibold text-gray-900 group-hover:text-indigo-600 transition-colors truncate max-w-xs">
                         {email.sender}
@@ -339,13 +341,16 @@ export function FullInboxPage() {
 
       {/* ✅ USE EmailModal COMPONENT - NO INLINE MODAL */}
       {selectedEmail && (
-        <EmailModal
-          email={selectedEmail}
-          onClose={() => setSelectedEmail(null)}
-          onClassify={handleUpdateStatus}
-          userRole={user?.role || "WORKER"}
-        />
-      )}
-    </div>
-  );
-}
+  <EmailModal
+    email={selectedEmail}
+    onClose={() => {
+      isClosingRef.current = true;
+      setSelectedEmail(null);
+      setTimeout(() => {
+        isClosingRef.current = false;
+      }, 300);
+    }}
+    onClassify={handleUpdateStatus}
+    userRole={user?.role || "WORKER"}
+  />
+)}
