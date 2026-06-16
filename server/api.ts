@@ -172,15 +172,30 @@ apiRouter.get("/oauth/google/callback", async (req, res) => {
 });
 
 // ✅ Client OAuth Callback (FOR MAILBOX CONNECTIONS)
-apiRouter.get("/clients/oauth/callback", authenticateToken, requireAdmin, async (req, res) => {
-  const { code } = req.query;
+apiRouter.get("/clients/oauth/callback", async (req, res) => {
+  const { code, state } = req.query;
 
   if (!code) {
     return res.status(400).send("Authorization code missing from Google redirect.");
   }
 
+  // ✅ Validate state parameter to verify admin user
+  let adminEmail;
   try {
-    // Exchange code for tokens
+    const decoded = Buffer.from(state as string, 'base64').toString('utf-8');
+    const [userId, email] = decoded.split(':');
+    
+    const userResult = await query("SELECT role FROM users WHERE id = $1 AND email = $2", [userId, email]);
+    if (userResult.rows.length === 0 || userResult.rows[0].role !== 'ADMIN') {
+      throw new Error("Invalid or non-admin user");
+    }
+    adminEmail = email;
+  } catch (err) {
+    console.error("State validation failed:", err);
+    return res.redirect("/?oauth-client=error&message=Unauthorized");
+  }
+
+  try {
     const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -188,7 +203,7 @@ apiRouter.get("/clients/oauth/callback", authenticateToken, requireAdmin, async 
         code: String(code),
         client_id: process.env.GOOGLE_CLIENT_ID || "",
         client_secret: process.env.GOOGLE_CLIENT_SECRET || "",
-        redirect_uri: process.env.GOOGLE_CLIENT_REDIRECT_URI || "", // ✅ Client Mailbox Redirect
+        redirect_uri: process.env.GOOGLE_CLIENT_REDIRECT_URI || "",
         grant_type: "authorization_code",
       }),
     });
@@ -204,7 +219,6 @@ apiRouter.get("/clients/oauth/callback", authenticateToken, requireAdmin, async 
     const expiresIn = tokenData.expires_in || 3600;
     const expiryTimestamp = new Date(Date.now() + expiresIn * 1000);
 
-    // Get email from Google
     const profileResponse = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
@@ -213,11 +227,9 @@ apiRouter.get("/clients/oauth/callback", authenticateToken, requireAdmin, async 
     const email = profileData.email;
     const name = profileData.name || email.split("@")[0];
 
-    // Check if client already exists
     const existingClient = await query("SELECT id FROM clients WHERE email = $1", [email]);
 
     if (existingClient.rows.length > 0) {
-      // Update existing client with new tokens
       await query(
         `UPDATE clients 
          SET oauth_access_token = $1, oauth_refresh_token = $2, oauth_token_expiry = $3, status = 'connected', last_synced_at = NOW()
@@ -226,7 +238,6 @@ apiRouter.get("/clients/oauth/callback", authenticateToken, requireAdmin, async 
       );
       console.log(`[Client OAuth] Updated existing client: ${email}`);
     } else {
-      // Create new client
       await query(
         `INSERT INTO clients (client_name, email, provider, auth_type, oauth_access_token, oauth_refresh_token, oauth_token_expiry, status)
          VALUES ($1, $2, 'google', 'oauth', $3, $4, $5, 'connected')`,
@@ -235,13 +246,11 @@ apiRouter.get("/clients/oauth/callback", authenticateToken, requireAdmin, async 
       console.log(`[Client OAuth] Created new client: ${email}`);
     }
 
-    await logAudit(req.user.email, "ADMIN", `Connected client mailbox via OAuth: ${email}`, "SUCCESS");
-
-    // Redirect to dashboard with success message
+    await logAudit(adminEmail, "ADMIN", `Connected client mailbox via OAuth: ${email}`, "SUCCESS");
     res.redirect("/?oauth-client=success");
   } catch (err: any) {
     console.error("Client OAuth callback failed:", err);
-    await logAudit(req.user.email, "ADMIN", `Failed to connect client mailbox: ${err.message}`, "FAILED");
+    await logAudit(adminEmail, "ADMIN", `Failed to connect client mailbox: ${err.message}`, "FAILED");
     res.redirect("/?oauth-client=error");
   }
 });
@@ -429,20 +438,24 @@ apiRouter.post("/clients/imap", authenticateToken, requireAdmin, async (req: any
 // ✅ Client Mailbox Connection (KEEPS Gmail Scopes)
 apiRouter.get("/clients/oauth-link", authenticateToken, requireAdmin, (req, res) => {
   const scopes = [
-    "https://www.googleapis.com/auth/gmail.modify",  // ← For client mailboxes ONLY
+    "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/userinfo.email",
   ];
+
+  // ✅ Create state with user info (for callback validation)
+  const state = Buffer.from(req.user.id + ":" + req.user.email).toString('base64');
 
   const authUrl =
     "https://accounts.google.com/o/oauth2/v2/auth?" +
     new URLSearchParams({
       client_id: process.env.GOOGLE_CLIENT_ID || "",
-      redirect_uri: process.env.GOOGLE_CLIENT_REDIRECT_URI || "", // ✅ Client Mailbox Redirect
+      redirect_uri: process.env.GOOGLE_CLIENT_REDIRECT_URI || "",
       response_type: "code",
       scope: scopes.join(" "),
       access_type: "offline",
       prompt: "consent",
       include_granted_scopes: "true",
+      state: state, // ✅ Pass user info
     }).toString();
 
   res.json({ url: authUrl });
