@@ -23,42 +23,46 @@ export function FullInboxPage() {
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const scrollPositionRef = useRef<number>(0);
   const isInitialLoad = useRef(true);
-  const isClosingRef = useRef(false);
 
-const fetchEmails = async (showSpinner = false) => {
-  try {
-    const res = await apiFetch("/api/emails");
-    if (res.ok) {
-      const data = await res.json();
-      
-      const currentIds = new Set(data.map((e: EmailMessage) => e.id));
-      const newIds = new Set(data.filter((e: EmailMessage) => !previousEmailIds.has(e.id)).map((e: EmailMessage) => e.id));
-      
-      setEmails(data);
-      setPreviousEmailIds(currentIds);
-      setNewEmailIds(newIds);
-      
-      // ✅ 2. Added Sound Playback Logic
-      if (newIds.size > 0 && user?.role === "ADMIN") {
-        playNotificationSound();
-      }
-      
-      setTimeout(() => setNewEmailIds(new Set()), 1000);
-    }
-  } catch (err) {
-    console.error("Failed to fetch full inbox:", err);
-  } finally {
-    if (isInitialLoad.current) {
-      setLoading(false);
-      isInitialLoad.current = false;
-    }
-    setIsSyncing(false);
-    
+  const fetchEmails = async (showSpinner = false) => {
     if (tableContainerRef.current) {
-      tableContainerRef.current.scrollTop = scrollPositionRef.current;
+      scrollPositionRef.current = tableContainerRef.current.scrollTop;
     }
-  }
-};
+
+    if (showSpinner) setIsSyncing(true);
+    
+    try {
+      const res = await apiFetch("/api/emails");
+      if (res.ok) {
+        const data = await res.json();
+        
+        const currentIds = new Set(data.map((e: EmailMessage) => e.id));
+        const newIds = new Set(data.filter((e: EmailMessage) => !previousEmailIds.has(e.id)).map((e: EmailMessage) => e.id));
+        
+        setEmails(data);
+        setPreviousEmailIds(currentIds);
+        setNewEmailIds(newIds);
+        
+        if (newIds.size > 0 && user?.role === "ADMIN") {
+          playNotificationSound();
+        }
+        
+        setTimeout(() => setNewEmailIds(new Set()), 1000);
+      }
+    } catch (err) {
+      console.error("Failed to fetch full inbox:", err);
+    } finally {
+      if (isInitialLoad.current) {
+        setLoading(false);
+        isInitialLoad.current = false;
+      }
+      setIsSyncing(false);
+      
+      if (tableContainerRef.current) {
+        tableContainerRef.current.scrollTop = scrollPositionRef.current;
+      }
+    }
+  };
 
   useEffect(() => {
     fetchEmails();
@@ -67,25 +71,24 @@ const fetchEmails = async (showSpinner = false) => {
   }, []);
 
   const handleUpdateStatus = async (
-  emailId: string,
-  action: "send_to_tier2" | "pull_back" | "admin_only"
-) => {
-  try {
-    const res = await apiFetch(`/api/emails/${emailId}/classify`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action })
-    });
+    emailId: string,
+    action: "send_to_tier2" | "pull_back" | "admin_only"
+  ) => {
+    try {
+      const res = await apiFetch(`/api/emails/${emailId}/classify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action })
+      });
 
-    if (res.ok) {
-      // ✅ Clear selected email BEFORE refreshing to prevent modal reopen
-      setSelectedEmail(null);
-      await fetchEmails(false);
+      if (res.ok) {
+        setSelectedEmail(null); // ✅ Clear before refresh
+        await fetchEmails(false);
+      }
+    } catch (err) {
+      console.error("Failed to update status:", err);
     }
-  } catch (err) {
-    console.error("Failed to update status:", err);
-  }
-};
+  };
 
   const calculateExpiresIn = (expiresAtStr: string) => {
     const diff = getTimeRemaining(expiresAtStr);
