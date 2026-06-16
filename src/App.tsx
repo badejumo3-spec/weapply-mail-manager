@@ -24,9 +24,9 @@ export default function App() {
   const [syncing, setSyncing] = useState(false);
   const [panelError, setPanelError] = useState<string | null>(null);
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null);
-  const [oauthError, setOauthError] = useState<string | null>(null); // ✅ NEW: OAuth Error State
+  const [oauthError, setOauthError] = useState<string | null>(null);
 
-  // ✅ NEW: Handle OAuth Token from URL (Must run on mount)
+  // ✅ Handle OAuth Token from URL
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const oauthToken = urlParams.get("token");
@@ -35,7 +35,6 @@ export default function App() {
     if (oauthToken && !token) {
       localStorage.setItem("token", oauthToken);
       setToken(oauthToken);
-      // Clean URL without refreshing
       window.history.replaceState({}, document.title, "/");
     }
 
@@ -46,7 +45,7 @@ export default function App() {
     }
   }, []);
 
-  // ✅ Existing: Validate Token and Fetch User
+  // ✅ Validate Token and Fetch User
   useEffect(() => {
     const fetchMe = async () => {
       if (!token) {
@@ -98,6 +97,7 @@ export default function App() {
     setOauthError(null);
   };
 
+  // ✅ FIX: Removed selectedEmail from dependencies and removed restore logic
   const fetchEmails = useCallback(async () => {
     if (!token || !user) return;
     setLoadingEmails(true);
@@ -111,19 +111,13 @@ export default function App() {
       if (!res.ok) throw new Error("Failed to load email indexes.");
       const data: Email[] = await res.json();
       setEmailQueue(data);
-
-      if (selectedEmail) {
-        const matchingEmail = data.find((e) => e.id === selectedEmail.id);
-        if (matchingEmail) {
-          setSelectedEmail(matchingEmail);
-        }
-      }
+      // ✅ REMOVED: No more selectedEmail restore logic (was causing reopen bug)
     } catch (err: any) {
       setPanelError(err?.message || "Communication failure fetching mail.");
     } finally {
       setLoadingEmails(false);
     }
-  }, [token, user, activeTab, selectedEmail]);
+  }, [token, user, activeTab]); // ✅ REMOVED: selectedEmail from dependencies
 
   const fetchClients = useCallback(async () => {
     if (!token || !user || user.role !== "ADMIN") return;
@@ -243,7 +237,6 @@ export default function App() {
     return <Login onSuccess={handleLoginSuccess} oauthError={oauthError} />;
   }
 
-  // ✅ ThemeProvider MUST wrap the entire return JSX
   return (
     <ThemeProvider>
       <div className="flex bg-slate-100 dark:bg-slate-900 min-h-screen text-slate-800 dark:text-slate-100 font-sans antialiased transition-colors">
@@ -257,7 +250,6 @@ export default function App() {
         />
 
         <main className="flex-1 p-8 overflow-y-auto h-screen relative scrollbar">
-          {/* ✅ Show OAuth Error if present */}
           {oauthError && (
             <div className="mb-6 flex items-start space-x-2.5 p-4 rounded-xl bg-rose-50 dark:bg-rose-900/20 text-rose-800 dark:text-rose-300 text-xs font-semibold border border-rose-200 dark:border-rose-800">
               <AlertCircle className="h-4.5 w-4.5 shrink-0" />

@@ -122,12 +122,12 @@ export default function EmailModal({ email, onClose, onClassify, userRole }: Ema
                 </p>
               </div>
             </div>
-            {/* ✅ FIX: X button uses onMouseDown with preventDefault + stopPropagation */}
+            {/* ✅ FIX: onClick with setTimeout prevents ghost click-through */}
             <button
-              onMouseDown={(e) => {
+              onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                onClose();
+                setTimeout(() => onClose(), 50);
               }}
               className="p-1.5 hover:bg-slate-100 rounded-lg transition-colors"
             >
