@@ -55,7 +55,7 @@ export function requireAdmin(req: any, res: any, next: any) {
 
 // --- AUTHENTICATION ---
 
-// ✅ OAuth Initiation Route (LOGIN ONLY - Minimal Scopes)
+// ✅ User Login OAuth Initiation (LOGIN ONLY - Minimal Scopes)
 apiRouter.get("/oauth/google", (req, res) => {
   // ✅ LOGIN SCOPES ONLY - No Gmail access, no user cap
   const scopes = [
@@ -68,7 +68,7 @@ apiRouter.get("/oauth/google", (req, res) => {
     "https://accounts.google.com/o/oauth2/v2/auth?" +
     new URLSearchParams({
       client_id: process.env.GOOGLE_CLIENT_ID || "",
-      redirect_uri: process.env.GOOGLE_REDIRECT_URI || "",
+      redirect_uri: process.env.GOOGLE_LOGIN_REDIRECT_URI || "", // ✅ User Login Redirect
       response_type: "code",
       scope: scopes.join(" "),
       access_type: "offline",
@@ -79,7 +79,7 @@ apiRouter.get("/oauth/google", (req, res) => {
   res.redirect(authUrl);
 });
 
-// ✅ OAuth Callback Route (CLEANED - No Duplicates)
+// ✅ User Login OAuth Callback
 apiRouter.get("/oauth/google/callback", async (req, res) => {
   const { code } = req.query;
 
@@ -95,7 +95,7 @@ apiRouter.get("/oauth/google/callback", async (req, res) => {
         code: String(code),
         client_id: process.env.GOOGLE_CLIENT_ID || "",
         client_secret: process.env.GOOGLE_CLIENT_SECRET || "",
-        redirect_uri: process.env.GOOGLE_REDIRECT_URI || "",
+        redirect_uri: process.env.GOOGLE_LOGIN_REDIRECT_URI || "", // ✅ User Login Redirect
         grant_type: "authorization_code",
       }),
     });
@@ -153,7 +153,7 @@ apiRouter.get("/oauth/google/callback", async (req, res) => {
       console.log(`[OAuth] Existing ${user.role} user: ${email}`);
     }
 
-    // ✅ Generate JWT for app session (Change "24h" to "7d" if you want longer sessions)
+    // ✅ Generate JWT for app session
     const appToken = jwt.sign(
       { id: user.id, name: user.name, email: user.email, role: user.role },
       JWT_SECRET,
@@ -170,8 +170,83 @@ apiRouter.get("/oauth/google/callback", async (req, res) => {
     res.redirect("/?oauth=error");
   }
 });
+
+// ✅ Client OAuth Callback (FOR MAILBOX CONNECTIONS)
+apiRouter.get("/clients/oauth/callback", authenticateToken, requireAdmin, async (req, res) => {
+  const { code } = req.query;
+
+  if (!code) {
+    return res.status(400).send("Authorization code missing from Google redirect.");
+  }
+
+  try {
+    // Exchange code for tokens
+    const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        code: String(code),
+        client_id: process.env.GOOGLE_CLIENT_ID || "",
+        client_secret: process.env.GOOGLE_CLIENT_SECRET || "",
+        redirect_uri: process.env.GOOGLE_CLIENT_REDIRECT_URI || "", // ✅ Client Mailbox Redirect
+        grant_type: "authorization_code",
+      }),
+    });
+
+    if (!tokenResponse.ok) {
+      const errText = await tokenResponse.text();
+      throw new Error(`Token exchange failed: ${tokenResponse.status}`);
+    }
+
+    const tokenData = await tokenResponse.json();
+    const accessToken = tokenData.access_token;
+    const refreshToken = tokenData.refresh_token;
+    const expiresIn = tokenData.expires_in || 3600;
+    const expiryTimestamp = new Date(Date.now() + expiresIn * 1000);
+
+    // Get email from Google
+    const profileResponse = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    const profileData = await profileResponse.json();
+    const email = profileData.email;
+    const name = profileData.name || email.split("@")[0];
+
+    // Check if client already exists
+    const existingClient = await query("SELECT id FROM clients WHERE email = $1", [email]);
+
+    if (existingClient.rows.length > 0) {
+      // Update existing client with new tokens
+      await query(
+        `UPDATE clients 
+         SET oauth_access_token = $1, oauth_refresh_token = $2, oauth_token_expiry = $3, status = 'connected', last_synced_at = NOW()
+         WHERE email = $4`,
+        [accessToken, refreshToken, expiryTimestamp, email]
+      );
+      console.log(`[Client OAuth] Updated existing client: ${email}`);
+    } else {
+      // Create new client
+      await query(
+        `INSERT INTO clients (client_name, email, provider, auth_type, oauth_access_token, oauth_refresh_token, oauth_token_expiry, status)
+         VALUES ($1, $2, 'google', 'oauth', $3, $4, $5, 'connected')`,
+        [name, email, accessToken, refreshToken, expiryTimestamp]
+      );
+      console.log(`[Client OAuth] Created new client: ${email}`);
+    }
+
+    await logAudit(req.user.email, "ADMIN", `Connected client mailbox via OAuth: ${email}`, "SUCCESS");
+
+    // Redirect to dashboard with success message
+    res.redirect("/?oauth-client=success");
+  } catch (err: any) {
+    console.error("Client OAuth callback failed:", err);
+    await logAudit(req.user.email, "ADMIN", `Failed to connect client mailbox: ${err.message}`, "FAILED");
+    res.redirect("/?oauth-client=error");
+  }
+});
     
-// Register standard users (email/password users
+// Register standard users (email/password users)
 apiRouter.post("/auth/register", async (req, res) => {
   const { name, email, password, role } = req.body;
 
@@ -362,7 +437,7 @@ apiRouter.get("/clients/oauth-link", authenticateToken, requireAdmin, (req, res)
     "https://accounts.google.com/o/oauth2/v2/auth?" +
     new URLSearchParams({
       client_id: process.env.GOOGLE_CLIENT_ID || "",
-      redirect_uri: process.env.GOOGLE_REDIRECT_URI || "",
+      redirect_uri: process.env.GOOGLE_CLIENT_REDIRECT_URI || "", // ✅ Client Mailbox Redirect
       response_type: "code",
       scope: scopes.join(" "),
       access_type: "offline",
@@ -492,7 +567,7 @@ apiRouter.post("/emails/:id/classify", authenticateToken, requireAdmin, async (r
       classification_status,
       visibility_level,
     });
-  } catch (err) {
+  } catch (err: any) {
     res.status(500).json({ error: "Database error during classification update." });
   }
 });
