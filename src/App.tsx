@@ -239,7 +239,7 @@ export default function App() {
 
   return (
     <ThemeProvider>
-      <div className="flex bg-slate-100 dark:bg-slate-900 min-h-screen text-slate-800 dark:text-slate-100 font-sans antialiased transition-colors">
+      <div className="flex bg-slate-100 dark:bg-slate-950 min-h-screen text-slate-800 dark:text-slate-100 font-sans antialiased transition-colors duration-300">
         <Sidebar
           user={user}
           activeTab={activeTab}

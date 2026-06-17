@@ -22,7 +22,7 @@ export default function AuditLogger({ logs, loading }: AuditLoggerProps) {
   });
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 bg-slate-100 dark:bg-slate-950 min-h-screen p-8">
       {/* Search and control banner */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-white p-6 rounded-2xl border border-slate-200">
         <div>

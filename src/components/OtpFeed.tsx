@@ -102,7 +102,7 @@ export default function OtpFeed({ emails, loading, onRefresh, onSelectEmail }: O
   });
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 bg-slate-100 dark:bg-slate-950 min-h-screen p-8">
       {/* Search and control banner */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-white/80 dark:bg-slate-900/40 backdrop-blur-md p-5 rounded-2xl border border-slate-200/60 dark:border-slate-700/50 shadow-xs">
         <div>

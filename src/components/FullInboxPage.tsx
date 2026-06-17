@@ -139,7 +139,7 @@ export function FullInboxPage() {
   });
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 bg-slate-100 dark:bg-slate-950 min-h-screen p-8">
       
       {/* Page Title Panel */}
       <div className="bg-slate-900 dark:bg-slate-950 text-white rounded-2xl border border-slate-800 dark:border-slate-700 p-5 shadow-lg flex flex-col md:flex-row md:items-center justify-between gap-4">
