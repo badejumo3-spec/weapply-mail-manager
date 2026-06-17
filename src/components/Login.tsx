@@ -49,7 +49,7 @@ export default function Login({ onSuccess }: LoginProps) {
           <div className="w-12 h-12 bg-indigo-600 rounded-xl flex items-center justify-center mx-auto mb-4">
             <Mail className="h-6 w-6 text-white" />
           </div>
-          <h1 className="text-xl font-bold text-slate-900">WeApply4U Mail Manager</h1>
+          <h1 className="text-xl font-bold text-slate-900">WeApplying4U Mail Manager</h1>
           <p className="text-sm text-slate-500 mt-1">Sign in to access your dashboard</p>
         </div>
 

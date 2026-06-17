@@ -57,7 +57,7 @@ export default function Sidebar({ user, activeTab, setActiveTab, onLogout, synci
               <Mail className="h-4.5 w-4.5 stroke-[2]" />
             </div>
             <div>
-              <h1 className="font-bold tracking-tight text-lg text-slate-900 dark:text-white leading-tight">WeApply4U</h1>
+              <h1 className="font-bold tracking-tight text-lg text-slate-900 dark:text-white leading-tight">WeApplying4U</h1>
               <p className="text-[10px] text-slate-400 uppercase tracking-widest font-semibold">Mail Manager</p>
             </div>
           </div>
