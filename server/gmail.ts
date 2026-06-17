@@ -1,234 +1,239 @@
-import { google } from "googleapis";
-import { DBCleintAccount, createDatabase } from "./db";
-const db = createDatabase();
-import { decrypt } from "./crypto";
+import pg from "pg";
+import bcrypt from "bcrypt";
+import { UserRole, AuditLog } from "../src/types";
 
-const { OAuth2 } = google.auth;
-
-export function getOAuth2Client() {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  const redirectUri = process.env.GOOGLE_REDIRECT_URI || "http://localhost:3000/api/oauth/google/callback";
-  
-  return new OAuth2(clientId, clientSecret, redirectUri);
-}
-
-function decodeBase64(baseStr: string): string {
-  // Convert URL-safe base64 to standard base64 then decode to utf8 string
-  const standard = baseStr.replace(/-/g, "+").replace(/_/g, "/");
-  return Buffer.from(standard, "base64").toString("utf8");
-}
-
-export function getBodyTextFromMessage(payload: any): string {
-  if (!payload) return "";
-  
-  let bodyPlain = "";
-  let bodyHtml = "";
-
-  const findParts = (part: any) => {
-    if (part.mimeType === "text/plain" && part.body?.data) {
-      bodyPlain += " " + decodeBase64(part.body.data);
-    } else if (part.mimeType === "text/html" && part.body?.data) {
-      bodyHtml += " " + decodeBase64(part.body.data);
-    }
-    
-    if (part.parts) {
-      for (const p of part.parts) {
-        findParts(p);
-      }
-    }
-  };
-
-  // Check standard root body data
-  if (payload.mimeType === "text/plain" && payload.body?.data) {
-    bodyPlain += " " + decodeBase64(payload.body.data);
-  } else if (payload.mimeType === "text/html" && payload.body?.data) {
-    bodyHtml += " " + decodeBase64(payload.body.data);
-  }
-
-  // Recurse over nested sub-parts
-  if (payload.parts) {
-    for (const p of payload.parts) {
-      findParts(p);
-    }
-  }
-
-  return bodyPlain.trim() || bodyHtml.trim() || "";
-}
-
-export async function refreshAccessTokenIfNeeded(client: DBCleintAccount) {
-  const oauth2Client = getOAuth2Client();
-  
-  if (!client.oauth_refresh_token || !client.iv) {
-    throw new Error("Missing encrypted OAuth refresh token credentials or IV");
-  }
-  
-  // Decrypt secured refresh token using same AES-256 process
-  const decryptedRefreshToken = decrypt(client.oauth_refresh_token, client.iv);
-  
-  oauth2Client.setCredentials({
-    access_token: client.oauth_access_token || undefined,
-    refresh_token: decryptedRefreshToken,
-  });
-
-  // Check if token is expired or close to it
-  const isExpired = client.oauth_token_expiry 
-    ? new Date(client.oauth_token_expiry).getTime() <= Date.now() + 60000 // 1 minute safety buffer
-    : true;
-
-  if (isExpired) {
-    console.log(`Access token expired or about to expire for ${client.email}. Querying fresh OAuth credentials...`);
-    try {
-      const { credentials } = await oauth2Client.refreshAccessToken();
-      const newAccessToken = credentials.access_token;
-      
-      if (!newAccessToken) {
-        throw new Error("Google OAuth did not yield a fresh access_token");
-      }
-      
-      // Calculate token expiration timestamp
-      let expiryDate: string;
-      const exp = credentials.expiry_date;
-      if (exp) {
-        if (exp > Date.now()) {
-          expiryDate = new Date(exp).toISOString();
-        } else {
-          expiryDate = new Date(Date.now() + exp * 1000).toISOString();
-        }
-      } else {
-        expiryDate = new Date(Date.now() + 3600 * 1000).toISOString();
-      }
-      
-      // Update database safely
-      await db.updateClientOAuthTokens(client.id, newAccessToken, expiryDate);
-      
-      // Also update client fields locally for any fast consecutive uses
-      client.oauth_access_token = newAccessToken;
-      client.oauth_token_expiry = expiryDate;
-      
-      oauth2Client.setCredentials({
-        access_token: newAccessToken,
-        refresh_token: decryptedRefreshToken
-      });
-      
-      console.log(`Security token refreshed successfully for client: ${client.email}`);
-    } catch (refreshErr: any) {
-      console.error(`Failed to negotiate OAuth refresh for ${client.email}:`, refreshErr?.message || refreshErr);
-      throw new Error("OAuth delegation was revoked by Google or configuration is bad.");
-    }
-  }
-
-  return google.gmail({ version: "v1", auth: oauth2Client });
-}
-
-export async function getAuthenticatedGmailClient(client: DBCleintAccount) {
-  return refreshAccessTokenIfNeeded(client);
-}
-
-export function getEmailParts(payload: any): { text: string; html: string } {
-  if (!payload) return { text: "", html: "" };
-  
-  let text = "";
-  let html = "";
-
-  const findParts = (part: any) => {
-    if (part.mimeType === "text/plain" && part.body?.data) {
-      text += "\n" + decodeBase64(part.body.data);
-    } else if (part.mimeType === "text/html" && part.body?.data) {
-      html += "\n" + decodeBase64(part.body.data);
-    }
-    
-    if (part.parts) {
-      for (const p of part.parts) {
-        findParts(p);
-      }
-    }
-  };
-
-  if (payload.mimeType === "text/plain" && payload.body?.data) {
-    text += "\n" + decodeBase64(payload.body.data);
-  } else if (payload.mimeType === "text/html" && payload.body?.data) {
-    html += "\n" + decodeBase64(payload.body.data);
-  }
-
-  if (payload.parts) {
-    for (const p of payload.parts) {
-      findParts(p);
-    }
-  }
-
-  return { text: text.trim(), html: html.trim() };
-}
-
-export interface UnreadGmailMessage {
+export interface DBUser {
   id: string;
-  subject: string;
-  sender: string;
-  recipientEmail?: string | null;
-  bodyText: string;
-  bodyHtml: string;
-  snippet: string;
-  dateRec: string;
+  name: string;
+  email: string;
+  password_hash: string;
+  role: UserRole;
+  is_2fa_enabled: boolean;
+  created_at: string;
 }
 
-export async function fetchUnreadMessages(gmail: any): Promise<UnreadGmailMessage[]> {
-  const response = await gmail.users.messages.list({
-    userId: "me",
-    q: "newer_than:1h is:unread"
-  });
-  
-  const messages = response.data.messages || [];
-  const results: UnreadGmailMessage[] = [];
-  
-  for (const msg of messages) {
-    if (!msg.id) continue;
-    
-    try {
-      const detail = await gmail.users.messages.get({
-        userId: "me",
-        id: msg.id,
-        format: "full"
-      });
-      
-      const payload = detail.data.payload;
-      const headers = payload?.headers || [];
-      const subject = headers.find((h: any) => h.name?.toLowerCase() === "subject")?.value || "(No Subject)";
-      const fromHeader = headers.find((h: any) => h.name?.toLowerCase() === "from")?.value || "unknown@sender.com";
-      
-      const toHeader = headers.find((h: any) => h.name?.toLowerCase() === "to")?.value || "";
-      const emailMatch = toHeader.match(/<([^>]+)>/);
-      const recipientEmail = emailMatch ? emailMatch[1] : toHeader.trim();
+export interface DBClientAccount {
+  id: string;
+  clientName: string;
+  email: string;
+  provider: "google" | "microsoft";
+  auth_type: "imap" | "oauth";
+  imap_host?: string | null;
+  imap_port?: number | null;
+  encrypted_password?: string | null;
+  iv?: string | null;
+  oauth_access_token?: string | null;
+  oauth_refresh_token?: string | null;
+  oauth_token_expiry?: string | null;
+  status: "connected" | "syncing" | "expired" | "disconnected";
+  connectedAt: string;
+  lastSyncedAt: string;
+  assignedWorkers: string[];
+  totalEmailsProcessed: number;
+}
 
-      // Parse multi-part body or fall back to pre-rendered metadata snippet
-      const { text, html } = getEmailParts(payload);
-      const snippet = detail.data.snippet || "";
+export class DatabaseService {                
+  private pool: pg.Pool | null = null;
+
+  constructor() {
+    const dbUrl = process.env.DATABASE_URL;
+    if (!dbUrl) {
+      throw new Error("DATABASE_URL is required. No fallback allowed.");
+    }
+
+    console.log("DATABASE_URL found. Initializing PostgreSQL pool...");
+
+    this.pool = new pg.Pool({
+      connectionString: dbUrl,
+      ssl: {
+        rejectUnauthorized: false
+      }
+    });
+  }
+
+  async init() {
+    try {
+      const client = await this.pool!.connect();
+      console.log("CONNECTED to real PostgreSQL database! Setting up schemas...");
       
-      results.push({
-        id: msg.id,
-        subject,
-        sender: fromHeader,
-        recipientEmail,
-        bodyText: text || snippet,
-        bodyHtml: html || `<div>${text || snippet}</div>`,
-        snippet: snippet,
-        dateRec: detail.data.internalDate 
-          ? new Date(parseInt(detail.data.internalDate)).toISOString() 
-          : new Date().toISOString()
-      });
+      // 1. Create Users
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS users (
+          id VARCHAR(100) PRIMARY KEY,
+          name VARCHAR(255) NOT NULL,
+          email VARCHAR(255) UNIQUE NOT NULL,
+          password_hash VARCHAR(255) NOT NULL,
+          role VARCHAR(50) NOT NULL DEFAULT 'WORKER',
+          is_2fa_enabled BOOLEAN DEFAULT FALSE,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
+      // 2. Create Clients
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS clients (
+          id VARCHAR(100) PRIMARY KEY,
+          client_name VARCHAR(255) NOT NULL,
+          email VARCHAR(255) UNIQUE NOT NULL,
+          provider VARCHAR(50) NOT NULL,
+          auth_type VARCHAR(20) NOT NULL DEFAULT 'imap',
+          imap_host VARCHAR(255) NULL,
+          imap_port INTEGER NULL,
+          encrypted_password TEXT NULL,
+          iv VARCHAR(100) NULL,
+          oauth_access_token TEXT NULL,
+          oauth_refresh_token TEXT NULL,
+          oauth_token_expiry TIMESTAMP NULL,
+          status VARCHAR(50) NOT NULL DEFAULT 'connected',
+          connected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          last_synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          total_emails_processed INTEGER DEFAULT 0
+        )
+      `);
+
+      // 3. Create Assignments
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS worker_assignments (
+          id SERIAL PRIMARY KEY,
+          worker_id VARCHAR(100) REFERENCES users(id) ON DELETE CASCADE,
+          client_id VARCHAR(100) REFERENCES clients(id) ON DELETE CASCADE,
+          assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(worker_id, client_id)
+        )
+      `);
+
+      // 4. Create Emails Table
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS emails (
+          id VARCHAR(100) PRIMARY KEY,
+          client_id VARCHAR(100) REFERENCES clients(id) ON DELETE CASCADE,
+          sender VARCHAR(255) NOT NULL,
+          subject VARCHAR(500) NOT NULL,
+          recipient_email VARCHAR(255) NULL,
+          full_body_html TEXT NOT NULL,
+          full_body_text TEXT NOT NULL,
+          otp_code VARCHAR(32) NULL,
+          verification_link TEXT NULL,
+          received_at TIMESTAMP NOT NULL,
+          expires_at TIMESTAMP NOT NULL,
+          classification_status VARCHAR(50) NOT NULL,
+          visibility_level VARCHAR(20) NOT NULL
+        )
+      `);
+
+      // 5. Create Audit Log
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS audit_logs (
+          id VARCHAR(100) PRIMARY KEY,
+          timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          actor VARCHAR(255) NOT NULL,
+          role VARCHAR(50) NOT NULL,
+          action TEXT NOT NULL,
+          status VARCHAR(50) NOT NULL,
+          ip_address VARCHAR(100) NULL
+        )
+      `);
+
+      // Seed initial admin if database is empty
+      const userCountRes = await client.query("SELECT COUNT(*) FROM users");
+      const count = parseInt(userCountRes.rows[0].count);
+      if (count === 0) {
+        console.log("Seeding initial administrator credentials...");
+        const adminHash = await bcrypt.hash("adminpassword123", 10);
+
+        await client.query(`
+          INSERT INTO users (id, name, email, password_hash, role, is_2fa_enabled) VALUES
+          ('admin_1', 'Admin', 'badejumo3@gmail.com', $1, 'ADMIN', false)
+        `, [adminHash]);
+      }
+
+      client.release();
+      console.log("PostgreSQL setup completed successfully!");
     } catch (err) {
-      console.error(`Failed loading envelope for Gmail message UID ${msg.id}:`, err);
+      console.error("Error setting up PostgreSQL schemas.", err);
+      process.exit(1);
     }
   }
-  
-  return results;
+
+  // --- DATABASE HELPERS ---
+
+  async query(sql: string, params?: any[]) {
+    return await this.pool!.query(sql, params);
+  }
+
+  async updateClientOAuthTokens(id: string, accessToken: string, expiryDate?: string | null): Promise<void> {
+    if (expiryDate) {
+      await this.pool!.query(
+        "UPDATE clients SET oauth_access_token = $1, oauth_token_expiry = $2 WHERE id = $3",
+        [accessToken, new Date(expiryDate), id]
+      );
+    } else {
+      await this.pool!.query(
+        "UPDATE clients SET oauth_access_token = $1 WHERE id = $2",
+        [accessToken, id]
+      );
+    }
+  }
+
+  async updateClientSyncStats(id: string, emailCountIncrement = 1): Promise<void> {
+    await this.pool!.query(`
+      UPDATE clients 
+      SET total_emails_processed = total_emails_processed + $1, last_synced_at = CURRENT_TIMESTAMP
+      WHERE id = $2
+    `, [emailCountIncrement, id]);
+  }
+
+  async addAuditLog(log: Omit<AuditLog, "id">): Promise<void> {
+    const id = "log_" + Math.floor(Math.random() * 100000);
+    await this.pool!.query(`
+      INSERT INTO audit_logs (id, timestamp, actor, role, action, status, ip_address)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `, [
+      id,
+      new Date(log.timestamp),
+      log.actor,
+      log.role,
+      log.action,
+      log.status,
+      log.ip_address || null
+    ]);
+  }
 }
 
-export async function markMessageAsRead(gmail: any, messageId: string): Promise<void> {
-  await gmail.users.messages.modify({
-    userId: "me",
-    id: messageId,
-    requestBody: {
-      removeLabelIds: ["UNREAD"]
-    }
+// ============================================
+// WRAPPER FUNCTIONS FOR BACKWARD COMPATIBILITY
+// ============================================
+
+// ============================================
+// WRAPPER FUNCTIONS FOR BACKWARD COMPATIBILITY
+// ============================================
+
+export const db = new DatabaseService();
+
+export async function initDb() {
+  await db.init();
+}
+
+export async function query(sql: string, params?: any[]) {
+  return await db.query(sql, params);
+}
+
+export async function logAudit(
+  actor: string,
+  role: string,
+  action: string,
+  status: string,
+  ipAddress?: string
+) {
+  await db.addAuditLog({
+    timestamp: new Date().toISOString(),
+    actor,
+    role,
+    action,
+    status,
+    ip_address: ipAddress || null
   });
 }
+
+// DatabaseService class is already exported at line 35
+// db singleton is used internally by wrapper functions

@@ -436,7 +436,7 @@ apiRouter.post("/clients/imap", authenticateToken, requireAdmin, async (req: any
 });
 
 // ✅ Client Mailbox Connection (KEEPS Gmail Scopes)
-apiRouter.get("/clients/oauth-link", authenticateToken, requireAdmin, (req, res) => {
+apiRouter.get("/clients/oauth-link", authenticateToken, requireAdmin, (req: any, res) => {
   const scopes = [
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/userinfo.email",

@@ -318,8 +318,8 @@ async function syncImapClient(client: any) {
   try {
     // Search unread messages in INBOX
     const searchResult = await imapClient.search({ seen: false });
-    
-    for (const uid of searchResult) {
+    if (searchResult && Array.isArray(searchResult)) {
+      for (const uid of searchResult) {
       const fetchResult = await imapClient.fetchOne(uid, { source: true, envelope: true });
       if (!fetchResult || !fetchResult.source) continue;
 
@@ -378,6 +378,7 @@ async function syncImapClient(client: any) {
       // Add \Seen flag to mark as read
       await imapClient.messageFlagsAdd(uid, ["\\Seen"]);
       processedCount++;
+    }
     }
   } finally {
     lock.release();

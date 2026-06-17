@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Terminal, Shield, AlertCube, Calendar, Search } from "lucide-react";
+import { Terminal, Shield, Calendar, Search } from "lucide-react";
 import { AuditLog } from "../types";
 
 interface AuditLoggerProps {

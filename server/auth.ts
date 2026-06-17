@@ -49,7 +49,7 @@ export function authenticateToken(req: AuthenticatedRequest, res: Response, next
 
 // Role Middleware: Restricts access to ADMIN only
 export function requireAdmin(req: AuthenticatedRequest, res: Response, next: NextFunction) {
-  if (!req.user || req.user.role !== UserRole.ADMIN) {
+  if (!req.user || req.user.role !== "ADMIN") {
     return res.status(403).json({ error: "Access Denied: Tier 1 Administrator privilege required." });
   }
   next();

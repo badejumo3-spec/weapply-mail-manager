@@ -1,6 +1,6 @@
 import pg from "pg";
 import bcrypt from "bcrypt";
-import { UserRole, OtpEmail, SystemLog } from "../src/types";
+import { UserRole, AuditLog } from "../src/types";
 
 export interface DBUser {
   id: string;
@@ -183,7 +183,7 @@ export class DatabaseService {
     `, [emailCountIncrement, id]);
   }
 
-  async addAuditLog(log: Omit<SystemLog, "id">): Promise<void> {
+  async addAuditLog(log: Omit<AuditLog, "id">): Promise<void> {
     const id = "log_" + Math.floor(Math.random() * 100000);
     await this.pool!.query(`
       INSERT INTO audit_logs (id, timestamp, actor, role, action, status, ip_address)
@@ -195,7 +195,7 @@ export class DatabaseService {
       log.role,
       log.action,
       log.status,
-      log.ipAddress || null
+      log.ip_address || null
     ]);
   }
 }
@@ -208,7 +208,7 @@ export class DatabaseService {
 // WRAPPER FUNCTIONS FOR BACKWARD COMPATIBILITY
 // ============================================
 
-const db = new DatabaseService();
+export const db = new DatabaseService();
 
 export async function initDb() {
   await db.init();
@@ -231,7 +231,7 @@ export async function logAudit(
     role,
     action,
     status,
-    ipAddress: ipAddress || null
+    ip_address: ipAddress || null
   });
 }
 

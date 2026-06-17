@@ -1,5 +1,4 @@
 import { ImapFlow } from "imapflow";
-import { OtpEmail } from "../src/types";
 
 interface ParsedOtpResult {
   otpCode: string | null;

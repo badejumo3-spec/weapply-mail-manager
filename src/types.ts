@@ -38,6 +38,7 @@ export type VisibilityLevel = "tier1_only" | "tier2_allowed";
 export interface Email {
   id: number;
   client_id?: number | null;
+  client_name?: string | null;
   sender: string;
   recipient_email: string;
   subject: string;
