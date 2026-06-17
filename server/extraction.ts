@@ -96,7 +96,7 @@ export function extractAuthArtifacts(subject: string, text: string): ExtractionR
 
   // 4. Extract OTP Code with validation (+3 points if valid)
   let extractedOtp: string | null = null;
-  const otpRegex = /(?:verification code|security code|login code|one-time password|passcode|OTP|enter the code|use this code|authentication code|2FA code|PIN is|code is)[\s\S]{0,100}?([A-Za-z0-9]{4,10})/gi;
+  const otpRegex = /(?:verification code|security code|login code|one-time password|passcode|OTP|enter the code|use this code|authentication code|2FA code|PIN is|code is|system code|code:)[\s\S]{0,100}?([A-Za-z0-9]{4,10})/gi;
   
   let match;
   while ((match = otpRegex.exec(text)) !== null) {
@@ -106,6 +106,16 @@ export function extractAuthArtifacts(subject: string, text: string): ExtractionR
 
     // ✅ Validate OTP - reject years and zipcodes
     if (isCommonYearOrZip.test(candidate)) {
+      continue;
+    }
+
+    // ✅ Reject if the candidate is simply a plain capitalized or lowercase English grammatical word label 
+    // (e.g. "System", "Code", "Mechanism", "Details", "Option", "Multi", "Factor", "Verification")
+    // Secure PINs and OTPs that are pure letters must be all uppercase (like "ABCDEF").
+    // If it contains digits (like "492019" or "XY7B"), it is always allowed because it's not a standard text word.
+    const isPureAlphaWord = /^[A-Za-z]+$/.test(candidate);
+    const isCapitalizedOrLower = /^[A-Z][a-z]+$/.test(candidate) || /^[a-z]+$/.test(candidate);
+    if (isPureAlphaWord && isCapitalizedOrLower) {
       continue;
     }
 

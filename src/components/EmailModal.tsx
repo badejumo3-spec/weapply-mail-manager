@@ -3,6 +3,7 @@ import { X, Copy, Mail, ShieldAlert, Check, RefreshCw, EyeOff, Clock, Key, Link 
 import { motion, AnimatePresence } from "motion/react";
 import { Email } from "../types";
 import { getTimeRemaining, formatCountdown } from "../utils/time";
+import { useTheme } from "../context/ThemeContext";
 
 interface EmailModalProps {
   email: Email;
@@ -12,6 +13,8 @@ interface EmailModalProps {
 }
 
 export default function EmailModal({ email, onClose, onClassify, userRole }: EmailModalProps) {
+  const { theme } = useTheme();
+  const isDark = theme === "dark";
   const [copied, setCopied] = useState<"otp" | "link" | null>(null);
   const [timeLeft, setTimeLeft] = useState<string>("");
   const [isExpired, setIsExpired] = useState<boolean>(false);
@@ -78,8 +81,15 @@ export default function EmailModal({ email, onClose, onClassify, userRole }: Ema
     <html>
       <head>
         <style>
-          body { font-family: system-ui; font-size: 14px; padding: 16px; color: #1e293b; line-height: 1.6; }
-          a { color: #4f46e5; text-decoration: underline; }
+          body { 
+            font-family: system-ui, -apple-system, sRGB, Helvetica, Arial, sans-serif; 
+            font-size: 14px; 
+            padding: 16px; 
+            color: ${isDark ? "#f1f5f9" : "#1e293b"}; 
+            background-color: ${isDark ? "#1e293b" : "#ffffff"}; 
+            line-height: 1.6; 
+          }
+          a { color: ${isDark ? "#818cf8" : "#4f46e5"}; text-decoration: underline; }
           img { max-width: 100%; height: auto; }
         </style>
       </head>
