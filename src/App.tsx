@@ -25,6 +25,7 @@ export default function App() {
   const [panelError, setPanelError] = useState<string | null>(null);
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null);
   const [oauthError, setOauthError] = useState<string | null>(null);
+  const [countdown, setCountdown] = useState<number>(90);
 
   // ✅ Handle OAuth Token from URL
   useEffect(() => {
@@ -168,15 +169,22 @@ export default function App() {
   useEffect(() => {
     if (!token || !user) return;
 
-    const interval = setInterval(() => {
-      if (activeTab === "otps" || activeTab === "inbox") {
-        fetchEmails();
-      } else if (activeTab === "mailboxes") {
-        fetchClients();
-      }
-    }, 10000);
+    const timer = setInterval(() => {
+      setCountdown((prev) => {
+        if (prev <= 1) {
+          // Trigger data reload on expiration
+          if (activeTab === "otps" || activeTab === "inbox") {
+            fetchEmails();
+          } else if (activeTab === "mailboxes") {
+            fetchClients();
+          }
+          return 90;
+        }
+        return prev - 1;
+      });
+    }, 1000);
 
-    return () => clearInterval(interval);
+    return () => clearInterval(timer);
   }, [activeTab, token, user, fetchEmails, fetchClients]);
 
   const handleManualSync = async () => {
@@ -195,6 +203,7 @@ export default function App() {
       }
 
       await Promise.all([fetchEmails(), fetchClients()]);
+      setCountdown(90); // Reset the 90s countdown instantly on manual sync success!
     } catch (err: any) {
       setPanelError(err?.message || "Sync request server failed.");
     } finally {
@@ -247,6 +256,8 @@ export default function App() {
           onLogout={handleLogout}
           syncing={syncing}
           onManualSync={handleManualSync}
+          countdown={countdown}
+          onResetCountdown={() => setCountdown(90)}
         />
 
         <main className="flex-1 p-8 overflow-y-auto h-screen relative scrollbar">

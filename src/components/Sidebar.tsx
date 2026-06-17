@@ -9,9 +9,20 @@ interface SidebarProps {
   onLogout: () => void;
   syncing: boolean;
   onManualSync: () => Promise<void>;
+  countdown?: number;
+  onResetCountdown?: () => void;
 }
 
-export default function Sidebar({ user, activeTab, setActiveTab, onLogout, syncing, onManualSync }: SidebarProps) {
+export default function Sidebar({ 
+  user, 
+  activeTab, 
+  setActiveTab, 
+  onLogout, 
+  syncing, 
+  onManualSync,
+  countdown = 90,
+  onResetCountdown
+}: SidebarProps) {
   const { theme, toggleTheme } = useTheme(); // ✅ 2. Initialize Hook
   const isAdmin = user.role === "ADMIN";
 
@@ -152,15 +163,36 @@ export default function Sidebar({ user, activeTab, setActiveTab, onLogout, synci
           )}
         </div>
         <div className="flex items-center gap-2">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-555 animate-pulse shrink-0"></span>
-          <span className="text-[10px] font-bold text-slate-700 dark:text-slate-350">60s Auto Sync Active</span>
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
+          <span className="text-[10px] font-bold text-slate-705 dark:text-slate-300">
+            {syncing ? "Syncing mail..." : `${countdown}s Until Polling`}
+          </span>
         </div>
-        <div className="w-full bg-slate-200/70 dark:bg-slate-800 h-1 rounded-full overflow-hidden">
-          <div className="bg-indigo-600 dark:bg-indigo-500 h-full transition-all duration-1000 rounded-full" style={{ width: syncing ? "100%" : "65%" }}></div>
+        
+        {/* Polishing Countdown Slider Indicator */}
+        <div className="space-y-1">
+          <div className="relative flex items-center">
+            <input 
+              type="range" 
+              min="0" 
+              max="90" 
+              value={90 - countdown} 
+              readOnly
+              className="w-full h-1.5 bg-slate-200 dark:bg-slate-800 rounded-lg appearance-none cursor-not-allowed accent-indigo-600 dark:accent-indigo-500"
+              style={{
+                background: `linear-gradient(to right, rgb(79, 70, 229) 0%, rgb(79, 70, 229) ${((90 - countdown) / 90) * 100}%, rgba(148, 163, 184, 0.2) ${((90 - countdown) / 90) * 105}%, rgba(148, 163, 184, 0.2) 100%)`
+              }}
+            />
+          </div>
+          <div className="flex justify-between text-[8px] font-mono text-slate-400 dark:text-slate-500 font-semibold">
+            <span>Just Polled</span>
+            <span>90s Loop</span>
+          </div>
         </div>
-        <div className="flex justify-between text-[9px] text-slate-400/80 dark:text-slate-500 font-mono">
-          <span>Rentention: 1h</span>
-          <span>SSL Encryption</span>
+
+        <div className="flex justify-between text-[9px] text-slate-400/80 dark:text-slate-500 font-mono pt-1.5 border-t border-slate-100 dark:border-slate-800/50">
+          <span>Retention: 30m</span>
+          <span>SSL Active</span>
         </div>
       </div>
 

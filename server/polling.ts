@@ -8,13 +8,13 @@ import { decrypt } from "./crypto.js";
 import { extractAuthArtifacts } from "./extraction.js";
 
 // Keep track of exponential backoffs per client in milliseconds
-// backoff levels: 60s -> 120s -> 240s -> max 300s (300,000ms)
+// backoff levels: 90s -> 180s -> 360s -> max 600s
 const backoffStates: Record<number, { current: number; nextAllowedTime: number }> = {};
 
 function getBackoffState(clientId: number) {
   if (!backoffStates[clientId]) {
     backoffStates[clientId] = {
-      current: 60000,
+      current: 90000,
       nextAllowedTime: 0,
     };
   }
@@ -23,8 +23,8 @@ function getBackoffState(clientId: number) {
 
 function handleSuccess(clientId: number) {
   const state = getBackoffState(clientId);
-  state.current = 60000;
-  state.nextAllowedTime = Date.now() + 60000;
+  state.current = 90000;
+  state.nextAllowedTime = Date.now() + 90000;
 }
 
 function handleFailure(clientId: number, error: any) {
@@ -42,14 +42,14 @@ function handleFailure(clientId: number, error: any) {
 
   if (isNetworkError) {
     console.log(`[Polling] Network error detected for client ${clientId}. Increasing backoff...`);
-    // Backoff transitions: 60s (60000) -> 120s (120000) -> 240s (240000) -> max 300s (300000)
-    state.current = Math.min(300000, state.current * 2);
+    // Backoff transitions: 90s (90000) -> 180s (180000) -> 360s (360000) -> max 600s (600000)
+    state.current = Math.min(600000, state.current * 2);
     state.nextAllowedTime = Date.now() + state.current;
     console.log(`[Polling] Next sync allowed for client ${clientId} in ${state.current / 1000}s`);
   } else {
-    // If it's an authorization error, keep it at 60s but mark client with proper status
-    state.current = 60000;
-    state.nextAllowedTime = Date.now() + 60000;
+    // If it's an authorization error, keep it at 90s but mark client with proper status
+    state.current = 90000;
+    state.nextAllowedTime = Date.now() + 90000;
     console.warn(`[Polling] Authentication or processing error for client ${clientId}:`, error);
   }
 }
@@ -448,16 +448,15 @@ export async function runPollingTick() {
 let pollingInterval: NodeJS.Timeout | null = null;
 
 export function startPollingDaemon() {
-  console.log("[Daemon] Starting WeApply4U Mail Manager Polling Daemon (60s tick interval with exponential backoff)...");
+  console.log("[Daemon] Starting WeApply4U Mail Manager Polling Daemon (90s tick interval as requested)...");
   
   // Trigger immediately on startup
   runPollingTick().catch(err => console.error("Initial polling tick failed:", err));
 
-  // Run subsequent ticks every 10 seconds to respond quickly to backoffs and schedule due syncing,
-  // but clients will restrict themselves to their specified backoff window (60s initially)
+  // Run subsequent ticks every 90 seconds (90000ms) as requested
   pollingInterval = setInterval(() => {
     runPollingTick().catch(err => console.error("Scheduling tick error:", err));
-  }, 10000); 
+  }, 90000); 
 }
 
 export function stopPollingDaemon() {
