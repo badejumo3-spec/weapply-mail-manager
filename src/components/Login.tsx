@@ -1,17 +1,18 @@
-import { useState } from "react";
+import { useState, FormEvent } from "react";
 import { Mail, Lock, Loader2, AlertCircle } from "lucide-react";
 
 interface LoginProps {
   onSuccess: (token: string, user: any) => void;
+  oauthError?: string | null;
 }
 
-export default function Login({ onSuccess }: LoginProps) {
+export default function Login({ onSuccess, oauthError }: LoginProps) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleLogin = async (e: FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError("");
@@ -42,49 +43,54 @@ export default function Login({ onSuccess }: LoginProps) {
     window.location.href = "/api/oauth/google";
   };
 
+  const displayError = error || oauthError;
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-900 p-4">
-      <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-8 space-y-6">
-        <div className="text-center">
-          <div className="w-12 h-12 bg-indigo-600 rounded-xl flex items-center justify-center mx-auto mb-4">
+    <div className="min-h-screen flex items-center justify-center bg-radial from-slate-900 via-slate-950 to-black p-4 selection:bg-indigo-500/30 selection:text-indigo-200">
+      <div className="w-full max-w-md bg-slate-900/60 backdrop-blur-xl rounded-2xl border border-slate-800 shadow-2xl p-8 space-y-6 relative overflow-hidden group">
+        <div className="absolute -top-40 -left-40 w-80 h-80 bg-indigo-500/10 rounded-full blur-3xl group-hover:bg-indigo-500/15 transition-all duration-1000"></div>
+        <div className="absolute -bottom-40 -right-40 w-80 h-80 bg-rose-500/10 rounded-full blur-3xl group-hover:bg-rose-500/15 transition-all duration-1000"></div>
+        
+        <div className="text-center relative z-10">
+          <div className="w-14 h-14 bg-gradient-to-tr from-indigo-500 to-violet-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-indigo-500/20">
             <Mail className="h-6 w-6 text-white" />
           </div>
-          <h1 className="text-xl font-bold text-slate-900">WeApplying4U Mail Manager</h1>
-          <p className="text-sm text-slate-500 mt-1">Sign in to access your dashboard</p>
+          <h1 className="text-xl font-extrabold text-slate-100 tracking-tight bg-gradient-to-r from-white via-slate-100 to-slate-300 bg-clip-text text-transparent">WeApplying4U</h1>
+          <p className="text-[11px] font-mono font-bold tracking-widest text-indigo-400 uppercase mt-1">Mail Manager System</p>
         </div>
 
-        {error && (
-          <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 text-red-700 text-sm">
-            <AlertCircle className="h-4 w-4 shrink-0" />
-            <span>{error}</span>
+        {displayError && (
+          <div className="flex items-start gap-3 p-3.5 rounded-xl bg-rose-950/40 border border-rose-800/60 text-rose-300 text-xs leading-normal animate-shake relative z-10">
+            <AlertCircle className="h-4.5 w-4.5 shrink-0 text-rose-400 mt-0.5" />
+            <span>{displayError}</span>
           </div>
         )}
 
-        <form onSubmit={handleLogin} className="space-y-4">
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Email</label>
+        <form onSubmit={handleLogin} className="space-y-4 relative z-10">
+          <div className="space-y-1.5">
+            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Email Address</label>
             <div className="relative">
-              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+              <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
               <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-hidden focus:ring-2 focus:ring-indigo-600"
+                className="w-full pl-11 pr-4 py-2.5 bg-slate-950/50 border border-slate-800 rounded-xl text-xs font-semibold text-slate-100 placeholder-slate-600 focus:outline-hidden focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/50 transition-all duration-200"
                 placeholder="admin@weapplying4u.com"
                 required
               />
             </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Password</label>
+          <div className="space-y-1.5">
+            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Security Password</label>
             <div className="relative">
-              <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+              <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
               <input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-hidden focus:ring-2 focus:ring-indigo-600"
+                className="w-full pl-11 pr-4 py-2.5 bg-slate-950/50 border border-slate-800 rounded-xl text-xs font-semibold text-slate-100 placeholder-slate-600 focus:outline-hidden focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/50 transition-all duration-200"
                 placeholder="••••••••"
                 required
               />
@@ -94,27 +100,24 @@ export default function Login({ onSuccess }: LoginProps) {
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-semibold transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+            className="w-full h-11 bg-indigo-600 hover:bg-indigo-500 active:scale-[0.98] text-white rounded-xl text-xs font-bold transition-all disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/25 cursor-pointer"
           >
-            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            {loading ? "Signing in..." : "Sign In"}
+            {loading ? <Loader2 className="h-4.5 w-4.5 animate-spin" /> : null}
+            {loading ? "Authenticating session..." : "Access Control Sign In"}
           </button>
         </form>
 
-        <div className="relative">
-          <div className="absolute inset-0 flex items-center">
-            <div className="w-full border-t border-slate-200"></div>
-          </div>
-          <div className="relative flex justify-center text-xs">
-            <span className="px-2 bg-white text-slate-500">OR</span>
-          </div>
+        <div className="relative my-4 z-10 flex items-center">
+          <div className="flex-1 border-t border-slate-800"></div>
+          <span className="px-3 text-[10px] font-bold text-slate-600 uppercase tracking-widest bg-slate-900/0">or</span>
+          <div className="flex-1 border-t border-slate-800"></div>
         </div>
 
         <button
           onClick={handleGoogleLogin}
-          className="w-full py-2.5 bg-white hover:bg-slate-50 text-slate-700 rounded-lg text-sm font-semibold transition-colors border border-slate-200 flex items-center justify-center gap-2"
+          className="w-full h-11 bg-slate-950/40 hover:bg-slate-950/80 active:scale-[0.98] text-slate-200 rounded-xl text-xs font-bold transition-all border border-slate-800 hover:border-slate-700 flex items-center justify-center gap-2.5 shadow-sm cursor-pointer z-10 relative"
         >
-          <svg className="h-4 w-4" viewBox="0 0 24 24">
+          <svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24">
             <path
               fill="currentColor"
               d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
@@ -132,11 +135,11 @@ export default function Login({ onSuccess }: LoginProps) {
               d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
             />
           </svg>
-          Sign in with Google
+          Google Identity SSO
         </button>
 
-        <p className="text-xs text-slate-400 text-center">
-          Admin access only • Authorized personnel only
+        <p className="text-[10px] text-slate-500 text-center font-semibold uppercase tracking-wider relative z-10 pt-2 border-t border-slate-805/40">
+          Admin Gateways Only • Secure AES-256 Auth
         </p>
       </div>
     </div>
