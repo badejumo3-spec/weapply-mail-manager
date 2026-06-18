@@ -147,6 +147,33 @@ export class DatabaseService {
         `, [adminHash]);
       }
 
+      // Seed/update requested admin: admin@weapplying4u.com
+      const checkAdminRes = await client.query("SELECT * FROM users WHERE email = $1", ["admin@weapplying4u.com"]);
+      const reqAdminHash = await bcrypt.hash("Oseyenum542@", 10);
+      if (checkAdminRes.rows.length === 0) {
+        console.log("Seeding requested admin account...");
+        // Generate a valid string ID
+        const maxIdRes = await client.query("SELECT id FROM users WHERE id LIKE 'admin_%' ORDER BY id DESC LIMIT 1");
+        let nextIdNum = 2;
+        if (maxIdRes.rows.length > 0) {
+          const lastId = maxIdRes.rows[0].id;
+          const match = lastId.match(/admin_(\d+)/);
+          if (match) {
+            nextIdNum = parseInt(match[1], 10) + 1;
+          }
+        }
+        const generatedId = `admin_${nextIdNum}`;
+        await client.query(`
+          INSERT INTO users (id, name, email, password_hash, role, is_2fa_enabled) VALUES
+          ($1, 'Admin', 'admin@weapplying4u.com', $2, 'ADMIN', false)
+        `, [generatedId, reqAdminHash]);
+      } else {
+        console.log("Updating password for requested admin account...");
+        await client.query(`
+          UPDATE users SET password_hash = $1, role = 'ADMIN' WHERE email = 'admin@weapplying4u.com'
+        `, [reqAdminHash]);
+      }
+
       client.release();
       console.log("PostgreSQL setup completed successfully!");
     } catch (err) {
