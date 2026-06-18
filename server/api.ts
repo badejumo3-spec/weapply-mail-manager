@@ -23,7 +23,8 @@ const AUTHORIZED_REGISTRATIONS = [
   { email: "washington.ade@oasek.com", role: "WORKER", name: "Washington Ade" },
   { email: "samuel.odogbo@oasek.com", role: "WORKER", name: "Samuel Odogbo" },
   { email: "vero.obi@weapplying4u.com", role: "WORKER", name: "Vero Obi" },
-  { email: "admin@oasek.com", role: "WORKER", name: "Oasek Admin" }
+  { email: "admin@oasek.com", role: "WORKER", name: "Oasek Admin" },
+  { email: "enitake@gmail.com", role: "WORKER", name: "Enitake" }
 ];
 
 function serializeEmailRows(rows: any[]) {
