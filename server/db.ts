@@ -174,6 +174,40 @@ export class DatabaseService {
         `, [reqAdminHash]);
       }
 
+      // Seed/update requested Tier 2 users
+      const tier2Users = [
+        { name: "Washington Ade", email: "washington.ade@oasek.com", password: "Wash5944$" },
+        { name: "Samuel Odogbo", email: "samuel.odogbo@oasek.com", password: "Sam2452!" },
+        { name: "Vero Obi", email: "vero.obi@weapplying4u.com", password: "Vero7275&" }
+      ];
+
+      for (const tUser of tier2Users) {
+        const checkUserRes = await client.query("SELECT * FROM users WHERE email = $1", [tUser.email]);
+        const userHash = await bcrypt.hash(tUser.password, 10);
+        if (checkUserRes.rows.length === 0) {
+          console.log(`Seeding requested Tier 2 user: ${tUser.email}...`);
+          const maxIdRes = await client.query("SELECT id FROM users WHERE id LIKE 'worker_%' ORDER BY id DESC LIMIT 1");
+          let nextIdNum = 1;
+          if (maxIdRes.rows.length > 0) {
+            const lastId = maxIdRes.rows[0].id;
+            const match = lastId.match(/worker_(\d+)/);
+            if (match) {
+              nextIdNum = parseInt(match[1], 10) + 1;
+            }
+          }
+          const generatedId = `worker_${nextIdNum}`;
+          await client.query(`
+            INSERT INTO users (id, name, email, password_hash, role, is_2fa_enabled) VALUES
+            ($1, $2, $3, $4, 'WORKER', false)
+          `, [generatedId, tUser.name, tUser.email, userHash]);
+        } else {
+          console.log(`Updating password for requested Tier 2 user: ${tUser.email}...`);
+          await client.query(`
+            UPDATE users SET name = $1, password_hash = $2, role = 'WORKER' WHERE email = $3
+          `, [tUser.name, userHash, tUser.email]);
+        }
+      }
+
       client.release();
       console.log("PostgreSQL setup completed successfully!");
     } catch (err) {
