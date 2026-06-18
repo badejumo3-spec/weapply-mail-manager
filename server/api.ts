@@ -15,6 +15,17 @@ const ADMIN_EMAILS = [
   "admin@weapplying4u.com",
 ];
 
+// ✅ Pre-authorized Registration Email List (Tier 1 vs Tier 2)
+const AUTHORIZED_REGISTRATIONS = [
+  { email: "admin@weapplying4u.com", role: "ADMIN", name: "Admin" },
+  { email: "badejumo3@gmail.com", role: "ADMIN", name: "Badejumo Admin" },
+  { email: "wadejumo3@gmail.com", role: "ADMIN", name: "Wadejumo Admin" },
+  { email: "washington.ade@oasek.com", role: "WORKER", name: "Washington Ade" },
+  { email: "samuel.odogbo@oasek.com", role: "WORKER", name: "Samuel Odogbo" },
+  { email: "vero.obi@weapplying4u.com", role: "WORKER", name: "Vero Obi" },
+  { email: "admin@oasek.com", role: "WORKER", name: "Oasek Admin" }
+];
+
 function serializeEmailRows(rows: any[]) {
   return rows.map((email) => ({
     ...email,
@@ -255,54 +266,120 @@ apiRouter.get("/clients/oauth/callback", async (req, res) => {
   }
 });
     
-// Register standard users (email/password users)
-apiRouter.post("/auth/register", async (req, res) => {
-  const { name, email, password, role } = req.body;
+// Check if email is pre-authorized for registration
+apiRouter.post("/auth/check-pre-auth", async (req, res) => {
+  const { email } = req.body;
 
-  if (!name || !email || !password || !role) {
-    return res.status(400).json({ error: "Missing required fields for user creation." });
+  if (!email) {
+    return res.status(400).json({ error: "Email address is required." });
   }
 
-  if (role !== "ADMIN" && role !== "WORKER") {
-    return res.status(400).json({ error: "Valid role is required (ADMIN or WORKER)." });
+  const normalizedEmail = email.toLowerCase().trim();
+  const preAuth = AUTHORIZED_REGISTRATIONS.find(
+    (item) => item.email.toLowerCase() === normalizedEmail
+  );
+
+  if (!preAuth) {
+    return res.status(403).json({
+      error: "This email address is not pre-authorized for our system registration. Please contact your administrator."
+    });
   }
 
   try {
-    const checkUser = await query("SELECT id FROM users WHERE email = $1", [email]);
-    if (checkUser.rows.length > 0) {
-      return res.status(400).json({ error: "A user with this email address already exists." });
+    const existingUser = await query("SELECT id, password_hash FROM users WHERE email = $1", [normalizedEmail]);
+    if (existingUser.rows.length > 0 && existingUser.rows[0].password_hash) {
+      return res.status(400).json({
+        error: "This email registration is already complete. You can sign in directly."
+      });
     }
 
+    return res.json({
+      allowed: true,
+      email: preAuth.email,
+      role: preAuth.role,
+      name: preAuth.name
+    });
+  } catch (err: any) {
+    console.error("Error checking user existence during pre-auth check:", err);
+    return res.status(500).json({ error: "Server database verification error." });
+  }
+});
+    
+// Register standard users (email/password users)
+apiRouter.post("/auth/register", async (req, res) => {
+  const { name, email, password } = req.body;
+
+  if (!email || !password) {
+    return res.status(400).json({ error: "Missing required fields for user creation." });
+  }
+
+  const normalizedEmail = email.toLowerCase().trim();
+  const preAuth = AUTHORIZED_REGISTRATIONS.find(
+    (item) => item.email.toLowerCase() === normalizedEmail
+  );
+
+  if (!preAuth) {
+    return res.status(403).json({ error: "This email address is not pre-authorized for registration." });
+  }
+
+  const finalRole = preAuth.role;
+  const finalName = name || preAuth.name;
+
+  try {
+    const checkUser = await query("SELECT id, password_hash FROM users WHERE email = $1", [normalizedEmail]);
     const hash = await bcrypt.hash(password, 10);
-    
-    // ✅ GENERATE STRING ID for new users
-    const maxIdResult = await query(`SELECT id FROM users WHERE id LIKE '${role.toLowerCase()}_%' ORDER BY id DESC LIMIT 1`);
-    let nextIdNum = 1;
-    
-    if (maxIdResult.rows.length > 0) {
-      const lastId = maxIdResult.rows[0].id;
-      const lastNum = parseInt(lastId.split('_')[1], 10);
-      nextIdNum = lastNum + 1;
+
+    let registeredUser;
+
+    if (checkUser.rows.length > 0) {
+      // User exists (e.g. from seed or standard record). Let's update password and name
+      await query(
+        `UPDATE users 
+         SET name = $1, password_hash = $2, role = $3
+         WHERE email = $4`,
+        [finalName, hash, finalRole, normalizedEmail]
+      );
+      
+      const updatedUserRes = await query("SELECT id, name, email, role, is_2fa_enabled FROM users WHERE email = $1", [normalizedEmail]);
+      registeredUser = updatedUserRes.rows[0];
+      
+      await logAudit(
+        normalizedEmail,
+        finalRole,
+        `User registration password active/updated under name ${finalName}.`,
+        "SUCCESS",
+        req.ip
+      );
+    } else {
+      // User does not exist, insert brand new user with ID matching the prefix
+      const maxIdResult = await query(`SELECT id FROM users WHERE id LIKE '${finalRole.toLowerCase()}_%' ORDER BY id DESC LIMIT 1`);
+      let nextIdNum = 1;
+      
+      if (maxIdResult.rows.length > 0) {
+        const lastId = maxIdResult.rows[0].id;
+        const lastNum = parseInt(lastId.split('_')[1], 10);
+        nextIdNum = lastNum + 1;
+      }
+      
+      const generatedId = `${finalRole.toLowerCase()}_${nextIdNum}`;
+      
+      const result = await query(
+        `INSERT INTO users (id, name, email, password_hash, role, is_2fa_enabled) 
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, email, role, is_2fa_enabled`,
+        [generatedId, finalName, normalizedEmail, hash, finalRole, false]
+      );
+
+      registeredUser = result.rows[0];
+      await logAudit(
+        normalizedEmail,
+        finalRole,
+        `User self-registered successfully under account name ${finalName}.`,
+        "SUCCESS",
+        req.ip
+      );
     }
-    
-    const generatedId = `${role.toLowerCase()}_${nextIdNum}`;
-    
-    const result = await query(
-      `INSERT INTO users (id, name, email, password_hash, role, is_2fa_enabled) 
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, email, role, is_2fa_enabled`,
-      [generatedId, name, email, hash, role, false]
-    );
 
-    const newUser = result.rows[0];
-    await logAudit(
-      newUser.email,
-      newUser.role,
-      `User self-registered successfully under account name ${newUser.name}.`,
-      "SUCCESS",
-      req.ip
-    );
-
-    res.status(201).json({ user: newUser });
+    res.status(201).json({ user: registeredUser });
   } catch (err: any) {
     console.error("Registration error:", err);
     res.status(500).json({ error: "Server error during registration." });
