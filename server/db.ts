@@ -178,7 +178,8 @@ export class DatabaseService {
       const tier2Users = [
         { name: "Washington Ade", email: "washington.ade@oasek.com", password: "Wash5944$" },
         { name: "Samuel Odogbo", email: "samuel.odogbo@oasek.com", password: "Sam2452!" },
-        { name: "Vero Obi", email: "vero.obi@weapplying4u.com", password: "Vero7275&" }
+        { name: "Vero Obi", email: "vero.obi@weapplying4u.com", password: "Vero7275&" },
+        { name: "Oasek Admin", email: "admin@oasek.com", password: "Oseyenum542@" }
       ];
 
       for (const tUser of tier2Users) {

@@ -330,7 +330,7 @@ export function FullInboxPage() {
         <EmailModal
           email={selectedEmail}
           onClose={() => setSelectedEmail(null)}
-          onClassify={handleUpdateStatus}
+          onClassify={(action) => handleUpdateStatus(selectedEmail.id.toString(), action)}
           userRole={user?.role || "WORKER"}
         />
       )}

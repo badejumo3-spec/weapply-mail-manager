@@ -61,3 +61,62 @@ export interface AuditLog {
   status: string;
   ip_address?: string | null;
 }
+
+// Backward compatibility and component-specific types
+export interface EmailAccount {
+  id: string;
+  clientName: string;
+  email: string;
+  provider: "google" | "microsoft";
+  auth_type: "imap" | "oauth";
+  status: "connected" | "syncing" | "expired" | "disconnected";
+  totalEmailsProcessed: number;
+  lastSyncedAt: string;
+  assignedWorkers: string[];
+}
+
+export interface WorkerInfo {
+  id: string;
+  name: string;
+  email: string;
+  status: "active" | "offline";
+  twoFactorEnabled: boolean;
+  activeInboxes: number;
+  otpCountToday: number;
+}
+
+export interface SystemLog {
+  id: string;
+  timestamp: string;
+  actor: string;
+  role: string;
+  action: string;
+  status: "success" | "warning" | "error";
+  ipAddress?: string | null;
+}
+
+export interface OtpEmail {
+  id: string;
+  clientName: string;
+  provider: "google" | "microsoft";
+  source: string;
+  subject?: string;
+  otpCode?: string | null;
+  verificationLink?: string | null;
+  timestamp: string;
+}
+
+export interface DrizzleSchemaColumn {
+  name: string;
+  type: string;
+  constraints?: string;
+  description: string;
+}
+
+export interface DrizzleSchemaTable {
+  name: string;
+  description: string;
+  columns: DrizzleSchemaColumn[];
+}
+
+export type EmailMessage = Email;
