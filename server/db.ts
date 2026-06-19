@@ -1,5 +1,5 @@
 import pg from "pg";
-import bcrypt from "bcrypt";
+import crypto from "crypto";
 import { UserRole, AuditLog } from "../src/types";
 
 export interface DBUser {
@@ -134,28 +134,20 @@ export class DatabaseService {
         )
       `);
 
-      // Seed initial fallback admin if database is empty
-      const userCountRes = await client.query("SELECT COUNT(*) FROM users");
-      const count = parseInt(userCountRes.rows[0].count);
-      if (count === 0) {
-        console.log("Seeding initial administrator credentials...");
-        const adminHash = await bcrypt.hash("adminpassword123", 10);
-
-        await client.query(`
-          INSERT INTO users (id, name, email, password_hash, role, is_2fa_enabled) VALUES
-          ('admin_1', 'Admin', 'badejumo3@gmail.com', $1, 'ADMIN', false)
-        `, [adminHash]);
+      // Seed/update main admin purely via Render Environment Variable
+      const adminSecret = process.env.OASEK_ADMIN_PASSWORD;
+      if (!adminSecret) {
+        throw new Error("CRITICAL CONFIG ERROR: OASEK_ADMIN_PASSWORD environment variable is missing on Render!");
       }
 
-      // Seed/update main admin using Render Environment Variable
-      const adminSecret = process.env.OASEK_ADMIN_PASSWORD || "Oseyenum542@";
       const checkAdminRes = await client.query("SELECT * FROM users WHERE email = $1", ["admin@weapplying4u.com"]);
+      const bcrypt = await import("bcrypt");
       const reqAdminHash = await bcrypt.hash(adminSecret, 10);
       
       if (checkAdminRes.rows.length === 0) {
         console.log("Seeding requested admin account...");
         const maxIdRes = await client.query("SELECT id FROM users WHERE id LIKE 'admin_%' ORDER BY id DESC LIMIT 1");
-        let nextIdNum = 2;
+        let nextIdNum = 1;
         if (maxIdRes.rows.length > 0) {
           const lastId = maxIdRes.rows[0].id;
           const match = lastId.match(/admin_(\d+)/);
@@ -169,13 +161,13 @@ export class DatabaseService {
           ($1, 'Admin', 'admin@weapplying4u.com', $2, 'ADMIN', false)
         `, [generatedId, reqAdminHash]);
       } else {
-        console.log("Updating password for requested admin account...");
+        console.log("Updating admin metadata and hashing secure credentials...");
         await client.query(`
           UPDATE users SET password_hash = $1, role = 'ADMIN' WHERE email = 'admin@weapplying4u.com'
         `, [reqAdminHash]);
       }
 
-      // Seed/update requested Tier 2 users with a safe, temporary password setup
+      // Dynamic provisioning list (No fallback passwords stored here)
       const tier2Users = [
         { name: "Washington Ade", email: "washington.ade@oasek.com" },
         { name: "Samuel Odogbo", email: "samuel.odogbo@oasek.com" },
@@ -183,15 +175,16 @@ export class DatabaseService {
         { name: "Oasek Admin", email: "admin@oasek.com" },
       ];
 
-      // Default temporary onboarding password for new self-service accounts
-      const defaultTemporaryPassword = "WelcomeSetup2026!"; 
-      const userHash = await bcrypt.hash(defaultTemporaryPassword, 10);
-
       for (const tUser of tier2Users) {
         const checkUserRes = await client.query("SELECT * FROM users WHERE email = $1", [tUser.email]);
         
         if (checkUserRes.rows.length === 0) {
-          console.log(`Seeding requested Tier 2 user: ${tUser.email}...`);
+          console.log(`Provisioning blank user profile for self-service password creation: ${tUser.email}...`);
+          
+          // Generate an un-loggable randomized placeholder hash so account is secure until they create a real password
+          const lockedAccountString = `LOCKED_UNSET_${crypto.randomBytes(16).toString("hex")}`;
+          const lockedHash = await bcrypt.hash(lockedAccountString, 10);
+
           const maxIdRes = await client.query("SELECT id FROM users WHERE id LIKE 'worker_%' ORDER BY id DESC LIMIT 1");
           let nextIdNum = 1;
           if (maxIdRes.rows.length > 0) {
@@ -205,10 +198,10 @@ export class DatabaseService {
           await client.query(`
             INSERT INTO users (id, name, email, password_hash, role, is_2fa_enabled) VALUES
             ($1, $2, $3, $4, 'WORKER', false)
-          `, [generatedId, tUser.name, tUser.email, userHash]);
+          `, [generatedId, tUser.name, tUser.email, lockedHash]);
         } else {
-          // If user already exists, we do not overwrite their password_hash to prevent locking them out
-          console.log(`User already exists, updating metadata details only for: ${tUser.email}...`);
+          // Keep existing user passwords intact so you never overwrite their customized self-service passwords
+          console.log(`Skipping password rewrite; updating active metadata for: ${tUser.email}`);
           await client.query(`
             UPDATE users SET name = $1, role = 'WORKER' WHERE email = $2
           `, [tUser.name, tUser.email]);
