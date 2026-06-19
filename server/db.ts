@@ -179,7 +179,7 @@ export class DatabaseService {
         { name: "Washington Ade", email: "washington.ade@oasek.com"},
         { name: "Samuel Odogbo", email: "samuel.odogbo@oasek.com"},
         { name: "Vero Obi", email: "vero.obi@weapplying4u.com"},
-        { name: "Oasek Admin", email: "admin@oasek.com"}
+        { name: "Oasek Admin", email: "admin@oasek.com"},
       ];
 
       for (const tUser of tier2Users) {
