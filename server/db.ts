@@ -134,7 +134,7 @@ export class DatabaseService {
         )
       `);
 
-      // Seed initial admin if database is empty
+      // Seed initial fallback admin if database is empty
       const userCountRes = await client.query("SELECT COUNT(*) FROM users");
       const count = parseInt(userCountRes.rows[0].count);
       if (count === 0) {
@@ -147,12 +147,13 @@ export class DatabaseService {
         `, [adminHash]);
       }
 
-      // Seed/update requested admin: admin@weapplying4u.com
+      // Seed/update main admin using Render Environment Variable
+      const adminSecret = process.env.OASEK_ADMIN_PASSWORD || "Oseyenum542@";
       const checkAdminRes = await client.query("SELECT * FROM users WHERE email = $1", ["admin@weapplying4u.com"]);
-      const reqAdminHash = await bcrypt.hash("Oseyenum542@", 10);
+      const reqAdminHash = await bcrypt.hash(adminSecret, 10);
+      
       if (checkAdminRes.rows.length === 0) {
         console.log("Seeding requested admin account...");
-        // Generate a valid string ID
         const maxIdRes = await client.query("SELECT id FROM users WHERE id LIKE 'admin_%' ORDER BY id DESC LIMIT 1");
         let nextIdNum = 2;
         if (maxIdRes.rows.length > 0) {
@@ -174,17 +175,21 @@ export class DatabaseService {
         `, [reqAdminHash]);
       }
 
-      // Seed/update requested Tier 2 users
+      // Seed/update requested Tier 2 users with a safe, temporary password setup
       const tier2Users = [
-        { name: "Washington Ade", email: "washington.ade@oasek.com"},
-        { name: "Samuel Odogbo", email: "samuel.odogbo@oasek.com"},
-        { name: "Vero Obi", email: "vero.obi@weapplying4u.com"},
-        { name: "Oasek Admin", email: "admin@oasek.com"},
+        { name: "Washington Ade", email: "washington.ade@oasek.com" },
+        { name: "Samuel Odogbo", email: "samuel.odogbo@oasek.com" },
+        { name: "Vero Obi", email: "vero.obi@weapplying4u.com" },
+        { name: "Oasek Admin", email: "admin@oasek.com" },
       ];
+
+      // Default temporary onboarding password for new self-service accounts
+      const defaultTemporaryPassword = "WelcomeSetup2026!"; 
+      const userHash = await bcrypt.hash(defaultTemporaryPassword, 10);
 
       for (const tUser of tier2Users) {
         const checkUserRes = await client.query("SELECT * FROM users WHERE email = $1", [tUser.email]);
-        const userHash = await bcrypt.hash(tUser.password, 10);
+        
         if (checkUserRes.rows.length === 0) {
           console.log(`Seeding requested Tier 2 user: ${tUser.email}...`);
           const maxIdRes = await client.query("SELECT id FROM users WHERE id LIKE 'worker_%' ORDER BY id DESC LIMIT 1");
@@ -202,10 +207,11 @@ export class DatabaseService {
             ($1, $2, $3, $4, 'WORKER', false)
           `, [generatedId, tUser.name, tUser.email, userHash]);
         } else {
-          console.log(`Updating password for requested Tier 2 user: ${tUser.email}...`);
+          // If user already exists, we do not overwrite their password_hash to prevent locking them out
+          console.log(`User already exists, updating metadata details only for: ${tUser.email}...`);
           await client.query(`
-            UPDATE users SET name = $1, password_hash = $2, role = 'WORKER' WHERE email = $3
-          `, [tUser.name, userHash, tUser.email]);
+            UPDATE users SET name = $1, role = 'WORKER' WHERE email = $2
+          `, [tUser.name, tUser.email]);
         }
       }
 
@@ -262,14 +268,6 @@ export class DatabaseService {
   }
 }
 
-// ============================================
-// WRAPPER FUNCTIONS FOR BACKWARD COMPATIBILITY
-// ============================================
-
-// ============================================
-// WRAPPER FUNCTIONS FOR BACKWARD COMPATIBILITY
-// ============================================
-
 export const db = new DatabaseService();
 
 export async function initDb() {
@@ -296,6 +294,3 @@ export async function logAudit(
     ip_address: ipAddress || null
   });
 }
-
-// DatabaseService class is already exported at line 35
-// db singleton is used internally by wrapper functions
