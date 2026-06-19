@@ -150,10 +150,10 @@ async function syncGmailClient(client: any) {
     throw new Error("No access token available for Gmail OAuth synchronization.");
   }
 
-  // Get unread emails in the last 1 hour
-  // Query: newer_than:1h is:unread
-  const qStr = encodeURIComponent("newer_than:1h is:unread");
-  const listUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${qStr}`;
+  // Get unread emails in the last 1 hour (including Spam folder)
+  // Query: newer_than:1h is:unread -is:trash
+  const qStr = encodeURIComponent("newer_than:1h is:unread -is:trash");
+  const listUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${qStr}&includeSpamTrash=true`;
   
   let res = await fetch(listUrl, {
     headers: {
@@ -312,76 +312,106 @@ async function syncImapClient(client: any) {
   });
 
   await imapClient.connect();
-  const lock = await imapClient.getMailboxLock("INBOX");
   let processedCount = 0;
 
   try {
-    // Search unread messages in INBOX
-    const searchResult = await imapClient.search({ seen: false });
-    if (searchResult && Array.isArray(searchResult)) {
-      for (const uid of searchResult) {
-      const fetchResult = await imapClient.fetchOne(uid, { source: true, envelope: true });
-      if (!fetchResult || !fetchResult.source) continue;
-
-      const parsed = await simpleParser(fetchResult.source);
-      
-      const subject = parsed.subject || "(No Subject)";
-      const senderObj = parsed.from?.value?.[0];
-      const sender = senderObj ? `${senderObj.name || ""} <${senderObj.address || ""}>`.trim() : "Unknown Sender";
-      const recipient = client.email;
-      const receivedAt = parsed.date
-       ? new Date(parsed.date)
-       : new Date();
-      const receivedISO = receivedAt.toISOString();
-
-      // Duplicate prevention
-      const dupCheck = await query(
-        `SELECT id FROM emails 
-         WHERE sender = $1 AND recipient_email = $2 AND subject = $3 AND received_at = $4`,
-        [sender, recipient, subject, receivedISO]
-      );
-
-      if (dupCheck.rows.length > 0) {
-        // Mark as seen so we don't fetch it next time even if we skip inserting it
-        await imapClient.messageFlagsAdd(uid, ["\\Seen"]);
-        continue;
+    // Discover INBOX and scan list to find any Spam or Junk mailbox paths
+    const foldersToPoll = ["INBOX"];
+    try {
+      const foldersList = await imapClient.list();
+      for (const folder of foldersList) {
+        const path = folder.path;
+        const lowerPath = path.toLowerCase();
+        const isSpam = folder.specialUse === "\\Spam" || 
+                       folder.specialUse === "\\Junk" || 
+                       lowerPath.includes("spam") || 
+                       lowerPath.includes("junk");
+        if (isSpam && !foldersToPoll.includes(path)) {
+          foldersToPoll.push(path);
+        }
       }
-
-      const bodyHtml = parsed.html || parsed.text || "No HTML content";
-      const bodyText = parsed.text || parsed.html || "No plaintext content";
-
-      // Perform extraction
-      const extract = extractAuthArtifacts(subject, bodyText);
-      // ✅ CHANGE: Expiration changed from 60 minutes to 30 minutes
-      const expiresAt = new Date(receivedAt.getTime() + 30 * 60 * 1000).toISOString();
-
-      // Insert
-      await query(
-        `INSERT INTO emails (client_id, sender, recipient_email, subject, full_body_html, full_body_text, otp_code, verification_link, received_at, expires_at, classification_status, visibility_level)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-        [
-          client.id,
-          sender,
-          recipient,
-          subject,
-          bodyHtml,
-          bodyText,
-          extract.otp_code,
-          extract.verification_link,
-          receivedISO,
-          expiresAt,
-          extract.classification_status,
-          extract.visibility_level,
-        ]
-      );
-
-      // Add \Seen flag to mark as read
-      await imapClient.messageFlagsAdd(uid, ["\\Seen"]);
-      processedCount++;
+    } catch (listErr) {
+      console.warn(`[IMAP] Could not list folders for discovery, falling back to INBOX only:`, listErr);
     }
+
+    for (const folderPath of foldersToPoll) {
+      let folderLock;
+      try {
+        folderLock = await imapClient.getMailboxLock(folderPath);
+        
+        // Search unread messages in current folder
+        const searchResult = await imapClient.search({ seen: false });
+        if (searchResult && Array.isArray(searchResult)) {
+          for (const uid of searchResult) {
+            const fetchResult = await imapClient.fetchOne(uid, { source: true, envelope: true });
+            if (!fetchResult || !fetchResult.source) continue;
+
+            const parsed = await simpleParser(fetchResult.source);
+            
+            const subject = parsed.subject || "(No Subject)";
+            const senderObj = parsed.from?.value?.[0];
+            const sender = senderObj ? `${senderObj.name || ""} <${senderObj.address || ""}>`.trim() : "Unknown Sender";
+            const recipient = client.email;
+            const receivedAt = parsed.date
+             ? new Date(parsed.date)
+             : new Date();
+            const receivedISO = receivedAt.toISOString();
+
+            // Duplicate prevention
+            const dupCheck = await query(
+              `SELECT id FROM emails 
+               WHERE sender = $1 AND recipient_email = $2 AND subject = $3 AND received_at = $4`,
+              [sender, recipient, subject, receivedISO]
+            );
+
+            if (dupCheck.rows.length > 0) {
+              // Mark as seen so we don't fetch it next time even if we skip inserting it
+              await imapClient.messageFlagsAdd(uid, ["\\Seen"]);
+              continue;
+            }
+
+            const bodyHtml = parsed.html || parsed.text || "No HTML content";
+            const bodyText = parsed.text || parsed.html || "No plaintext content";
+
+            // Perform extraction
+            const extract = extractAuthArtifacts(subject, bodyText);
+            // ✅ CHANGE: Expiration changed from 60 minutes to 30 minutes
+            const expiresAt = new Date(receivedAt.getTime() + 30 * 60 * 1000).toISOString();
+
+            // Insert
+            await query(
+              `INSERT INTO emails (client_id, sender, recipient_email, subject, full_body_html, full_body_text, otp_code, verification_link, received_at, expires_at, classification_status, visibility_level)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+              [
+                client.id,
+                sender,
+                recipient,
+                subject,
+                bodyHtml,
+                bodyText,
+                extract.otp_code,
+                extract.verification_link,
+                receivedISO,
+                expiresAt,
+                extract.classification_status,
+                extract.visibility_level,
+              ]
+            );
+
+            // Add \Seen flag to mark as read
+            await imapClient.messageFlagsAdd(uid, ["\\Seen"]);
+            processedCount++;
+          }
+        }
+      } catch (folderErr) {
+        console.error(`[IMAP] Failed during scanning folder ${folderPath} for client ${client.email}:`, folderErr);
+      } finally {
+        if (folderLock) {
+          folderLock.release();
+        }
+      }
     }
   } finally {
-    lock.release();
     await imapClient.logout();
   }
 
