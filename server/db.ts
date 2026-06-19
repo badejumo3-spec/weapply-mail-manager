@@ -176,10 +176,10 @@ export class DatabaseService {
 
       // Seed/update requested Tier 2 users
       const tier2Users = [
-        { name: "Washington Ade", email: "washington.ade@oasek.com", password: "Wash5944$" },
-        { name: "Samuel Odogbo", email: "samuel.odogbo@oasek.com", password: "Sam2452!" },
-        { name: "Vero Obi", email: "vero.obi@weapplying4u.com", password: "Vero7275&" },
-        { name: "Oasek Admin", email: "admin@oasek.com", password: "Oseyenum542@" }
+        { name: "Washington Ade", email: "washington.ade@oasek.com"},
+        { name: "Samuel Odogbo", email: "samuel.odogbo@oasek.com"},
+        { name: "Vero Obi", email: "vero.obi@weapplying4u.com"},
+        { name: "Oasek Admin", email: "admin@oasek.com"}
       ];
 
       for (const tUser of tier2Users) {
